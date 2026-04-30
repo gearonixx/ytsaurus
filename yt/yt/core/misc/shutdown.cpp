@@ -26,12 +26,19 @@
 namespace NYT {
 
 ////////////////////////////////////////////////////////////////////////////////
+///
+///
+// Так что HungExitCode = «код возврата на случай зависания»
 
 class TShutdownManager
 {
 public:
+    // Это паттерн Singleton — гарантия, что у TShutdownManager существует ровно один экземпляр на всю программу, доступный из любого места через TShutdownManager::Get().
     static TShutdownManager* Get()
     {
+        //  один экземпляр, разрушается при выходе из программы.
+        // Leaky Singleton — один экземпляр, не разрушается никогда (ОС сама заберёт память при убийстве процесса).
+        // чтобы объект был жив до самого конца, даже когда другие глобальные объекты в своих деструкторах его дёргают. Иначе словишь use-after-free из-за непредсказуемого порядка разрушения статиков._оj_j
         return LeakySingleton<TShutdownManager>();
     }
 
@@ -192,6 +199,8 @@ public:
 private:
     std::atomic<FILE*> ShutdownLogFile_ = IsShutdownLoggingEnabledImpl() ? stderr : nullptr;
 
+    // Это «крутящийся» лок. Когда поток не может его захватить, он не спит, а в цикле проверяет: «свободен? свободен? свободен?» — пока другой поток его не отпустит.
+    // «Fork-aware» = «знает про fork()».
     YT_DECLARE_SPIN_LOCK(NThreading::TForkAwareSpinLock, Lock_);
 
     struct TRegisteredCallback

@@ -22,12 +22,19 @@ using namespace NYTree;
 
 static TYsonString DoExecuteTool(const std::string& toolName, const TYsonString& serializedArgument, bool shutdownLogging);
 
+
+// Правильно, это не отдельные бинарники. 
+// Tool в этом контексте — это просто C++ функция, зарегистрированная в реестре по имени.
+
+// SpawnTool запускает инструмент в отдельном дочернем процессе (через fork/exec), а не в текущем.SpawnTool запускает инструмент в отдельном дочернем процессе (через fork/exec), а не в текущем.
 TYsonString SpawnTool(const std::string& toolName, const TYsonString& serializedArgument)
 {
+    // Дочерний процесс = новый процесс, который запускает другой процесс (родитель).
     auto process = TSubprocess(TString(ToolsProgramName));
     process.AddArguments({
         "--tool-name",
         toolName,
+        // tool-spec = «спецификация (параметры) для tool'а», то есть аргумент, с которым tool должен выполниться.
         "--tool-spec",
         serializedArgument.AsStringBuf()
     });
@@ -36,6 +43,7 @@ TYsonString SpawnTool(const std::string& toolName, const TYsonString& serialized
     if (!result.Status.IsOK()) {
         THROW_ERROR_EXCEPTION("Failed to run %v", toolName)
             << result.Status
+            // process.GetCommandLine() возвращает полную команду, которой запускался дочерний процесс — что-то вроде:
             << TErrorAttribute("command_line", process.GetCommandLine())
             << TErrorAttribute("error", std::string(result.Error.Begin(), result.Error.End()));
     }

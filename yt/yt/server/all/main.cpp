@@ -35,6 +35,9 @@
 
 #include <library/cpp/getopt/small/last_getopt_parse_result.h>
 
+
+#include <iostream>
+
 namespace NYT {
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -200,7 +203,12 @@ int main(int argc, const char** argv)
         argv++;
     }
 
-    if (!GetProgramMap().TryRun(argc, argv)) {
+    const auto output = !GetProgramMap().TryRun(argc, argv);
+
+    // printed 1
+    std::cout << output << std::endl;
+
+    if (output) {
         // Handles auxiliary flags like --version and --build.
         TAllProgram().Run(argc, argv);
     }

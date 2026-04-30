@@ -133,7 +133,9 @@ int TProgram::Run(int argc, const char** argv)
     OptsParseResult_ = std::make_unique<TOptsParseResult>(this, argc, argv);
 
     auto run = [&] {
+        // HandleProgramInfo() обрабатывает «информационные» флаги командной строки те, которые просто что-то печатают и завершают программу, не запуская её основную логику.
         HandleProgramInfo();
+        // \\\\ Virtual Function - not implemented here
         DoRun();
     };
 
@@ -168,6 +170,8 @@ void TProgram::Exit(int code) noexcept
 
     // This explicit call may become obsolete some day;
     // cf. the comment section for NYT::Shutdown.
+    // ет фоновые потоки, флашит логи, закрывает сетевые соединения, дожидается завершения отложенных задач и т.д. В YT много долгоживущих подсистем
+    // то функция самого YT, не из стандартной библиотеки. Она нужна, чтобы корректно остановить всю инфраструктуру YT, которая работает в процессе:
     Shutdown({
         .AbortOnHang = ShouldAbortOnHungShutdown(),
         .HungExitCode = code,

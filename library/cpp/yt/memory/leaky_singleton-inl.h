@@ -35,9 +35,11 @@ T* TLeakyStorage<T>::Get()
 
 ////////////////////////////////////////////////////////////////////////////////
 
+    // Почему два файла, а не один: шаблоны в C++ нельзя класть в .cpp
 template <class T, class... TArgs>
 T* LeakySingleton(TArgs&&... args)
 {
+    // те. мы бы клали реализацию в CPP, но там типо нельзя ипсолзовать templates поэтому кладет в inl? или как
     static TLeakyStorage<T> Storage(std::forward<TArgs>(args)...);
     return Storage.Get();
 }

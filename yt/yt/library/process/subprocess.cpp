@@ -20,22 +20,32 @@ using namespace NPipeIO;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// (64 KB).
+//: «когда будем читать из pipe подпроцесса, читаем кусками по 64 КБ за раз».
 static const size_t PipeBlockSize = 64 * 1024;
 
 static YT_DEFINE_GLOBAL(const NLogging::TLogger, Logger, "Subprocess");
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// copyEnv — флаг: копировать ли переменные окружения родителя в подпроцесс. Если true, подпроцесс унаследует PATH, HOME и т.д.
+
+
+// Tool в YT = маленькая утилитарная операция, которую запускают в отдельном процессе для изоляции и/или повышения прав.
 TSubprocess::TSubprocess(std::string path, bool copyEnv)
     : Path_(std::move(path))
     , Process_(New<TSimpleProcess>(Path_, copyEnv))
 { }
 
+// Зачем: программа может запускать свою копию с другими аргументами для изоляции задач (sandbox, выполнение чужого кода в отдельном процессе, перезапуск себя). Классический приём в больших системах.
+// «создай мне порождатель копий текущего процесса»
 TSubprocess TSubprocess::CreateCurrentProcessSpawner()
 {
     return TSubprocess(GetExecPath());
 }
 
+// TStringBuf arg — параметр типа TStringBuf (аналог std::string_view
+// то паттерн фасад. TSubprocess — удобная обёртка с понятным API. Снаружи никт
 void TSubprocess::AddArgument(TStringBuf arg)
 {
     Process_->AddArgument(arg);
