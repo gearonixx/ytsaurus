@@ -331,6 +331,7 @@ size_t GetCurrentProcessId()
     return GetPID();
 }
 
+    // @gearonixx in proc.cpp
 size_t GetCurrentThreadId()
 {
     return TThread::CurrentThreadNumericId();

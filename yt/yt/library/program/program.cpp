@@ -168,6 +168,7 @@ void TProgram::Exit(int code) noexcept
     __llvm_profile_write_file();
 #endif
 
+    // @gearonixx
     // This explicit call may become obsolete some day;
     // cf. the comment section for NYT::Shutdown.
     // ет фоновые потоки, флашит логи, закрывает сетевые соединения, дожидается завершения отложенных задач и т.д. В YT много долгоживущих подсистем

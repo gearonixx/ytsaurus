@@ -15,6 +15,7 @@ TString TypeName(const std::type_info& typeInfo);
 TString TypeName(const std::type_index& typeInfo);
 
 // Works for types known at compile-time
+// @gearonixx
 // (thus, does not take any inheritance into account)
 template <class T>
 inline TString TypeName() {

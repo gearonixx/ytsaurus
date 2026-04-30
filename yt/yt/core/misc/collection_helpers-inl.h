@@ -187,6 +187,10 @@ auto& GetOrCrash(TMap&& map, const TKey& key)
 template <class TMap, class TKey>
 void EraseOrCrash(TMap&& map, const TKey& key)
 {
+    // @gearonixx
+    // std::forward сохраняет категорию значения — если передали lvalue, внутри останется lvalue; если rvalue — останется rvalue
+    // Это нужно, чтобы функция работала с любым способом передачи контейнера.
+    // типо collectection_helpers
     YT_VERIFY(std::forward<TMap>(map).erase(key) > 0, Format("EraseOrCrash failed, key is not found in map (MapType: %v, KeyType: %v)",
         TypeName<TMap>(), TypeName<TKey>()));
 }

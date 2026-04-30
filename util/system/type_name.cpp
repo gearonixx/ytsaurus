@@ -54,10 +54,13 @@ static TString TypeNameImpl(const char* name) {
     return demangled;
 }
 
+// @gearonixx
+// В C++ у каждого типа в рантайме можно получить информацию о нём — это и есть std::type_info
 TString TypeName(const std::type_info& typeInfo) {
     return TypeNameImpl(typeInfo.name()); // NOLINT(arcadia-typeid-name-restriction)
 }
 
+// Вторая перегрузка делает то же самое, просто принимает type_index вместо type_info — чтобы было удобно вызывать и так, и так.
 TString TypeName(const std::type_index& typeIndex) {
     return TypeNameImpl(typeIndex.name());
 }

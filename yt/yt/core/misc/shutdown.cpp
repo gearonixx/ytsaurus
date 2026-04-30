@@ -74,18 +74,24 @@ public:
         return registeredCallback;
     }
 
+    // @gearonixx @core1
+    // the core shutdown function
     void Shutdown(const TShutdownOptions& options = {})
     {
         std::vector<TRegisteredCallback> registeredCallbacks;
 
         {
+            // doing the guard lock
             auto guard = Guard(Lock_);
 
+            // ok it's if true end
             if (ShutdownStarted_.load()) {
                 return;
             }
 
+            // if not started start
             ShutdownStarted_.store(true);
+            // yup
             ShutdownThreadId_.store(GetCurrentThreadId());
 
             if (auto* logFile = TryGetShutdownLogFile()) {
@@ -210,8 +216,13 @@ private:
         int Priority;
     };
 
+    // oh there is the ref counting logic on top
     struct TRefCountedRegisteredCallback
         : public TRegisteredCallback
+     // @gearonixx
+    // 1. Менеджер shutdown'а
+    // 2. Тот, кто зарегистрировал коллбэк
+    // те. несколько овнеров -> ref counted
         , public TRefCounted
     {
         ~TRefCountedRegisteredCallback()
@@ -220,8 +231,16 @@ private:
         }
     };
 
+    // @gearonixx
+    // Это реестр коллбэков, которые нужно вызвать при завершении
+    // Дубликаты не нужны — если кто-то регистрирует один и тот же коллбэк дважды, второй раз просто ничего не произойдёт.
     std::unordered_set<TRefCountedRegisteredCallback*> RegisteredCallbacks_;
     std::atomic<bool> ShutdownStarted_ = false;
+    // @gearonixx
+    // AutoShutdownEnabled дословно — «автоматический shutdown включён». То есть флаг, который говорит «можно ли запускать процедуру завершения автоматически».
+
+    //  AutoShutdown уважает рубильник, Shutdown — нет.
+    // Shutdown зовут руками (из main, из тестов), AutoShutdown зовут автоматически
     std::atomic<bool> AutoShutdownEnabled_ = true;
     std::atomic<size_t> ShutdownThreadId_ = 0;
 
@@ -233,15 +252,30 @@ private:
         return value == "1" || value == "true";
     }
 
+    // @gearonixx
+    // why guard here?
     void UnregisterShutdownCallback(TRefCountedRegisteredCallback* registeredCallback)
     {
+        // Если два потока одновременно полезут в unordered_set без синхронизации — undefined behavior: повреждение внутренних структур, краш, либо тихая порча данных.
         auto guard = Guard(Lock_);
+
+        // Чтения с разных потоков одновременно — безопасно.
+        // Хотя бы одна запись параллельно с чем угодно — UB.
         if (auto* logFile = TryGetShutdownLogFile()) {
             ::fprintf(logFile, "%s\t*** Shutdown callback unregistered (Name: %s, Priority: %d)\n",
                 GetInstant().ToString().c_str(),
                 registeredCallback->Name.c_str(),
                 registeredCallback->Priority);
         }
+        // вот здесь
+        // а если там было чтение, тогда не нужон было бы делать guard lock
+        //
+
+        // Все потоки только читают → guard не нужен, читать одновременно безопасно.
+        // Хоть один поток где-то пишет → guard нужен всем, и читателям тоже.
+
+        // То есть она зовёт RegisteredCallbacks_.erase(registeredCallback), и если элемент там не нашёлся — крашит программу ш
+        // (потому что это означает рассинхрон: пытаемся отписать то, что не было зарегистрировано).
         EraseOrCrash(RegisteredCallbacks_, registeredCallback);
     }
 

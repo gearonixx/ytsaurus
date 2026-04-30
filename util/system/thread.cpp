@@ -350,6 +350,8 @@ TThread::TId TThread::CurrentThreadId() noexcept {
     return SystemCurrentThreadId();
 }
 
+// we already have been there
+// @gearonixx - the that aware of the current threads part
 TThread::TId TThread::CurrentThreadNumericId() noexcept {
 #if defined(_win_)
     return GetCurrentThreadId();
