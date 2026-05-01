@@ -116,13 +116,30 @@ constinit const auto Logger = HttpProxyLogger;
     // @gearonixx @@http_proxy
 TBootstrap::TBootstrap(
     TProxyBootstrapConfigPtr config,
+    // сырое YSON-дерево (нужно когда какой-то компонент хочет вытащить свою секцию сам или конфиг динамический
     INodePtr configNode,
+    //  реестр синглтонов/сервисов процесса, через который компоненты находят друг друга без жёстких зависимостей в конструкторах.
+    // реестр для получения синглтонов процесса по типу, чтобы не тащить их явно через конструкторы.
+
+    // "Процесс" здесь — это конкретный бинарник ytserver-http-proxy, запущенный как один OS-процесс.
+
+    // ServiceLocator нужен потому, что часть синглтонов (
+    // Solomon exporter, core dumper, hotswap manager) живёт на уровне
+    // процесса и инициализируется до бутстрапа конкретной роли — http-proxy просто достаёт их по типу, а не пересоздаёт.
+
+    // (Connection к мастеру, серверы на разных портах, координатор, аутентификацию, drivers v3/v4 и т.д.
     IServiceLocatorPtr serviceLocator)
+    // Параметры приходят по значению (TProxyBootstrapConfigPtr config — это TIntrusivePtr), std::move переносит их в поля без лишнего инкремента/декремента счётчика ссылок
+    // . Стандартный паттерн "sink parameter": берёшь по значению — мувай в поле.
     : Config_(std::move(config))
     , ConfigNode_(std::move(configNode))
     , ServiceLocator_(std::move(serviceLocator))
+    //  однопоточная очередь действий ("control thread"), куда сериализуются все управляющие операции бутстрапа
+    //  (init, реакция на смену динамического конфига, реконфиги) — гарантирует, что состояние меняется в одном потоке без локов.
     , Control_(New<TActionQueue>("Control"))
+    // Один поток с epoll спокойно тянет десятки тысяч соединений: он спит в epoll_wait, просыпается на готовом сокете, обрабатывает событие, снова спит.
     , Poller_(CreateThreadPoolPoller(Config_->ThreadCount, "Poller"))
+    // Когда клиент стучится к серверу, ядро ставит его в очередь. `accept()` — это "забрать следующего из очереди и начать с ним общаться". Без `accept()` клиент висит и ждёт.
     , Acceptor_(CreateThreadPoolPoller(1, "Acceptor"))
 {
     // TODO(gepardo): Pass native authenticator here.

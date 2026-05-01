@@ -46,7 +46,11 @@ struct TSslContextCommand
 DEFINE_REFCOUNTED_TYPE(TSslContextCommand)
 
 ////////////////////////////////////////////////////////////////////////////////
+///
+/// @gearonixx @@crypto
+///
 
+/// CertificateAuthority — кому доверяем, CertificateChain + PrivateKey — кто мы сами, SslConfigurationCommands — тонкая настройка OpenSSL
 struct TSslContextConfig
     : public virtual NYTree::TYsonStruct
 {
@@ -57,6 +61,8 @@ struct TSslContextConfig
     //! Commands for SSL context configuration handled by SSL_CONF_cmd.
     std::vector<TSslContextCommandPtr> SslConfigurationCommands;
 
+    // @gearonixx
+    //  выключает верификацию, только для тестов.
     //! Trust everybody, never verify certificate, issue warning - for testing purpose.
     bool InsecureSkipVerify;
 

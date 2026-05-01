@@ -4,6 +4,7 @@ namespace NYT::NHttps {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+    // это конфиг TLS-сертификатов сервера (приватный ключ, цепочка сертификатов и параметры их обновления).
 void TServerCredentialsConfig::Register(TRegistrar registrar)
 {
     registrar.Parameter("update_period", &TThis::UpdatePeriod)

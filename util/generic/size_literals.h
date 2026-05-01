@@ -36,8 +36,13 @@ constexpr ui64 operator""_EB(unsigned long long value) noexcept {
 
 // Signed literals
 
+// Если что-то в NPrivate, его нельзя использовать в коде вне модуля, который его определяет.
 namespace NPrivate {
+    // буквально переводится как «каст в знаковый тип
     constexpr i64 SignedCast(ui64 value) {
+        // словие: value <= static_cast<ui64>(std::numeric_limits<i64>::max()) — «помещается ли значение в положительный диапазон i64».
+        // i64::max() — это 9223372036854775807 (примерно 9.2 квинтиллиона).
+        // Кастуется в ui64, чтобы сравнение шло в одной знаковости.
         return value <= static_cast<ui64>(std::numeric_limits<i64>::max())
                    ? static_cast<i64>(value)
                    : ythrow yexception() << "The resulting value " << value << " does not fit into the i64 type";

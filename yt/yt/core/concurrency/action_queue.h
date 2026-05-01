@@ -14,6 +14,8 @@ namespace NYT::NConcurrency {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+    // @gearonixx @@concurrency
+    // Комментарий XXX намекает, что конкретно TActionQueue это наследование не очень-то и нужно
 // XXX(sandello): Facade does not have to be ref-counted.
 class TActionQueue
     : public TRefCounted
@@ -22,6 +24,7 @@ public:
     explicit TActionQueue(std::string threadName = "ActionQueue");
     virtual ~TActionQueue();
 
+    // При graceful=true дожидается выполнения уже поставленных задач, при false бросает их и завершается сразу
     void Shutdown(bool graceful = false);
 
     const IInvokerPtr& GetInvoker();

@@ -9,8 +9,12 @@ namespace NYT {
 template <class TSignature>
 class TCallback;
 
+// @gearonixx
+// колбек без аргуvетнов и возвращаемого значения
 using TClosure = TCallback<void()>;
 
+// @gearonixx
+//  Это forward declarations
 template <class TSignature>
 class TCallbackList;
 

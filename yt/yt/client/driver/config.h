@@ -19,15 +19,27 @@ namespace NYT::NDriver {
 constexpr int ApiVersion3 = 3;
 constexpr int ApiVersion4 = 4;
 
+// @gearonixx
+// Это конфиги для разных «движков» внутри драйвера — драйвер ведь не просто коннектор к YT, а универсальный исполнитель команд, и каждая команда требует своих настроек.
+
 struct TDriverConfig
     : public NYTree::TYsonStruct
 {
+    // @gearonixx
+    // wtf???
+    // настройки для команд работы с файлами в Cypress (как читать/писать большие бинарные файлы по чанкам).
     NApi::TFileReaderConfigPtr FileReader;
     NApi::TFileWriterConfigPtr FileWriter;
+
+    //  для табличных команд; тут много специфики: формат строк, схема, политика sorted-write, размер блока и т.п. Лежат в
     NTableClient::TTableReaderConfigPtr TableReader;
     NTableClient::TTableWriterConfigPtr TableWriter;
+
+
+    //  для журналов (это append-only лог-структура в YT, типа Kafka внутри Cypress). У них своя семантика кворумной записи.
     NApi::TJournalReaderConfigPtr JournalReader;
     NApi::TJournalWriterConfigPtr JournalWriter;
+
     NChunkClient::TFetcherConfigPtr Fetcher;
     NChunkClient::TChunkFragmentReaderConfigPtr ChunkFragmentReader;
     int ApiVersion;

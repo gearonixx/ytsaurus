@@ -13,6 +13,7 @@ namespace NYT::NHttps {
 struct TServerCredentialsConfig
     : public NCrypto::TSslContextConfig
 {
+    // TServerCredentialsConfig нужен для горячей ротации сертов без рестарта процесса.
     TDuration UpdatePeriod;
 
     REGISTER_YSON_STRUCT(TServerCredentialsConfig);

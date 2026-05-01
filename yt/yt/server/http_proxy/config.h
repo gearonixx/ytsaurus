@@ -312,13 +312,21 @@ DEFINE_REFCOUNTED_TYPE(TAccessCheckerDynamicConfig)
 struct TProxyBootstrapConfig
     : public NServer::TNativeServerBootstrapConfig
 {
+    // @gearonixx
+    // TCP-порт, на котором HTTP-прокси слушает входящие запросы.
     int Port;
+    // Чем больше — тем больше параллельных соединений прокси может обрабатывать одновременно
     int ThreadCount;
 
+    //  конфиг основного HTTP-сервера
     NHttp::TServerConfigPtr HttpServer;
+    //  конфиг основного HTTPS-сервера
     NHttps::TServerConfigPtr HttpsServer;
+    // Отдельные слушатели для запросов, аутентифицируемых через TVM (Yandex'овая система межсервисной аутентификации)
     NHttp::TServerConfigPtr TvmOnlyHttpServer;
     NHttps::TServerConfigPtr TvmOnlyHttpsServer;
+    // идут по протоколу ClickHouse поверх HTTP (это не обычный YT API, а нативный CH-протокол),
+    // поэтому их нужно обрабатывать отдельным набором хендлеров;
     NHttp::TServerConfigPtr ChytHttpServer;
     NHttps::TServerConfigPtr ChytHttpsServer;
 

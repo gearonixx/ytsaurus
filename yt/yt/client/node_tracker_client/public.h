@@ -57,8 +57,23 @@ using THostId = NObjectClient::TObjectId;
 using TRackId = NObjectClient::TObjectId;
 using TDataCenterId = NObjectClient::TObjectId;
 
+    // @gearonixx
+    // `node_tracker_client` — это публичные типы и интерфейсы для работы с Node Tracker'ом мастер-сервера
+    // (подсистемой, которая ведёт реестр всех нод кластера и их адресов), вынесенные отдельно
+    // от серверной реализации, чтобы все клиенты — ноды, прокси, шедулер
+    // могли описывать свои адреса и топологию на общем языке без зависимости от тяжёлого кода мастера.
+
 // Only domain names, without port number.
+    // addresses = [
+    // ["default"; "proxy01.yt.example.com"];
+    // ["fastbone"; "proxy01-fb.yt.example.com"];
+    // ["ipv6"; "proxy01-v6.yt.example.com"];
+    // ]
+    //
+    // Это имена сетей в YT — логические метки, по которым клиент выбирает, через какой сетевой путь ему ходить до прокси
 using TNetworkAddressList = std::vector<std::pair<std::string, std::string>>;
+    // fastbone - Это отдельная высокоскоростная внутренняя сеть между серверами кластера.
+    // {"fastbone", "default", "ipv6"}
 using TNetworkPreferenceList = std::vector<std::string>;
 
 // Network -> host:port.

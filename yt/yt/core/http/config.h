@@ -61,6 +61,7 @@ struct TServerConfig
 
     //! Used for thread naming.
     //! CamelCase identifiers are preferred.
+    // @gearonixx like https for exapmle
     std::string ServerName;
 
     bool EnablePerPathRequestProfiling;

@@ -1080,6 +1080,8 @@ TYsonStructParameter<TValue>& TYsonStructParameter<TValue>::Default(TValue defau
 {
     static_assert(!std::is_convertible_v<TValue, TIntrusivePtr<TYsonStruct>>, "Use DefaultCtor to register TYsonStruct default.");
     DefaultCtor_ = [value = std::move(defaultValue)] () { return value; };
+    // Помечает поле как необязательное в YSON-файле. Раз дефолт есть — поле можно не указывать,
+    // парсер просто использует дефолт вместо того, чтобы ругаться «обязательное поле отсутствует».
     Optional_ = true;
     return *this;
 }
@@ -1236,12 +1238,16 @@ bool TYsonStructParameter<TValue>::HoldsField(ITypeErasedYsonStructFieldPtr eras
         }); \
     }
 
+    // @gearonixx
+    // postrocessor definition
 DEFINE_POSTPROCESSOR(
     GreaterThan(TValueType expected),
     actual > expected,
     TError("Expected > %v, found %v", expected, actual)
 )
 
+    // @gearonixx
+    // ytree yson struct params
 DEFINE_POSTPROCESSOR(
     GreaterThanOrEqual(TValueType expected),
     actual >= expected,
