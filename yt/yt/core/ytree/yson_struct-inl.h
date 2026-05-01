@@ -515,12 +515,34 @@ bool operator==(const T& lhs, const U& rhs)
 #undef REGISTER_DERIVED_EXTERNALIZED_YSON_STRUCT
 #undef ASSIGN_EXTERNAL_YSON_SERIALIZER
 
+    // again - NYT == Namespace YTSaurus
+
+    // @gearonixx expl
+    // 1. Без этого алиаса пришлось бы писать длинное:
+    // static void Register(::NYT::NYTree::TYsonStructRegistrar<TProxyBootstrapConfig> registrar);
+
+    // 2.Создаёт алиас TThis, ссылающийся на сам класс. Нужен, чтобы внутри Register(...) можно было обращаться к указателям на члены класса единообразно
+    // Без этого алиаса пришлось бы писать &TProxyBootstrapConfig::Port, и при переименовании класса нужно было бы править все строки.
+    // С TThis код реализации Register копируется между классами без изменений и не зависит от имени класса.
+
+    // 3. Макрос принимает имя класса параметром (TStruct), потому что он используется
+    // внутри объявления разных классов — TProxyBootstrapConfig, TNativeServerBootstrapConfig,
+
+    // про friend:
+    // Реестру нужно лезть в конфиг, чтобы записывать в его поля значения — сначала проставить дефолты при создании объекта (Port = 80 и т.д.), а потом, при парсинге YSON-файла, положить туда то, что прочитано из файла.
+    // Поля приватные, поэтому без friend реестр не сможет в них писать — компилятор не даст.
+    // Эта строчка просто разрешает реестру делать то, ради чего он вообще существует — заполнять конфиги данными.
 #define YSON_STRUCT_IMPL__DECLARE_ALIASES(TStruct) \
 private: \
     using TRegistrar = ::NYT::NYTree::TYsonStructRegistrar<TStruct>; \
     using TThis = TStruct; \
     friend class ::NYT::NYTree::TYsonStructRegistry;
 
+    // @gearonixx - NYT - Namespace YTsaurus
+    // YT_CURRENT_SOURCE_LOCATION — это просто метка с файлом и строкой кода, чтобы при ошибке инициализации в логах было видно, откуда объект был создан.
+
+    // ON-структур: «возьми только что созданный объект (this) и проставь во все его поля дефолтные значения, описанные в Register(...)
+    // yson struct ipml constructor body
 #define YSON_STRUCT_IMPL__CTOR_BODY \
     ::NYT::NYTree::TYsonStructRegistry::Get()->InitializeStruct(this, YT_CURRENT_SOURCE_LOCATION);
 
@@ -553,6 +575,9 @@ public: \
     TStruct(); \
     YSON_STRUCT_IMPL__DECLARE_ALIASES(TStruct)
 
+    // @gearonixx
+    // собственно регистратор
+    // // Обратный порядок аргументов (derived_from<Derived, Base> vs is_base_of<Base, Derived>) — частая ошибка при переходе с is_base_of.
 #define REGISTER_YSON_STRUCT(TStruct) \
 public: \
     TStruct() \

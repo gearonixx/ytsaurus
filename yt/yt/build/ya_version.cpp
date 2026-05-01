@@ -40,6 +40,8 @@ std::string TruncateCommitHash(std::string commit)
     return commit;
 }
 
+    // Это функция, которая собирает строку с описанием билда — какой бранч, в каком режиме скомпилировано, с какими санитайзерами включёнными.
+    // Это используется для версии бинарника — чтобы по строке версии было сразу понятно, в каком режиме это собрано. stable-1.5-release-ubsan
 void OutputCreateBranchCommitVersion(TStringBuf branch, TStringStream& out)
 {
     out << branch << "-" << GetVersionType();

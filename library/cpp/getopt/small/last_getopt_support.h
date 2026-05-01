@@ -22,7 +22,8 @@ namespace NLastGetopt {
 
     /// User passed incorrect arguments, parsing failed
     /// Note: use `throw TUsageException()` instead of `ythrow TUsageException()` to prevent appearence of stacktrace
-    /// and location of the `ythrow` statment in error messages.
+    /// // @gearonixx @UPSTREAM -> typo here (fixed)
+    /// and location of the `ythrow` statement in error messages.
     class TUsageException: public TException {
     };
 

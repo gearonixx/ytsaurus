@@ -34,12 +34,21 @@ namespace NPrivateException {
         TTempBuf& TempBuf_;
     };
 
+    // @gearonixx ytsaurus generic parameters
+    // Это базовый класс исключений в Аркадии/YT — их аналог std::exception со встроенной поддержкой стектрейса и удобного форматирования сообщений.
+    //  Зачем своё, а не std::exception
+    // std::exception::what() принимает только статическую строку. У стандартных исключений типа std::runtime_error строка задаётся в конструкторе и не меняется.
     class yexception: public std::exception {
     public:
+        // = default говорит компилятору: «сгенерируй стандартную реализацию сам».
         yexception();
+        // yexception b = a;              // вот этот copy constructor
         yexception(const yexception&) = default;
+        // yexception(yexception&&) = move constructor
+        // move-конструкторе — это rvalue reference. К
         yexception(yexception&&) = default;
 
+        // операторы для этих конструкторов
         yexception& operator=(const yexception&) = default;
         yexception& operator=(yexception&&) = default;
 
@@ -59,6 +68,7 @@ namespace NPrivateException {
         void ZeroTerminate() noexcept;
 
     private:
+        // @gearonixx Y_PURE
         TTempBuf Buf_;
     };
 

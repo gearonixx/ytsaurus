@@ -694,6 +694,7 @@ namespace NLastGetopt {
             return StoreMappedResultT<T>(target, func);
         }
 
+        // @gearonixx
         // Stores given value in *target if the option is present.
         // TValue must be a copyable type, constructible from TParam.
         // T must be a copyable type, assignable from TValue.

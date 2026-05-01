@@ -87,7 +87,9 @@
 #include <yt/yt/build/build.h>
 
 namespace NYT::NHttpProxy {
-
+    // @gearonixx
+    //  В коде, где из 30 разных подсистем YT используется по 5-10 типов, это огромная разница в читаемости.
+    // using namespace NApi; говорит компилятору: «когда увидишь IClient без префикса, попробуй найти его ещё и в NApi::». Это подсказка для разрешения имён на этапе парсинга, не более.
 using namespace NApi;
 using namespace NAuth;
 using namespace NConcurrency;
@@ -105,10 +107,13 @@ using namespace NFusion;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+    // @gearonixx contsinit???
+
 constinit const auto Logger = HttpProxyLogger;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+    // @gearonixx @@http_proxy
 TBootstrap::TBootstrap(
     TProxyBootstrapConfigPtr config,
     INodePtr configNode,

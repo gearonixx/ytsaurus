@@ -329,6 +329,8 @@ namespace NLastGetopt {
          *
          * @param c        new short name for help option
          */
+
+        // @gearonixx - the actual logic behind the CLI parse
         TOpt& AddHelpOption(char c = '?') {
             if (TOpt* o = FindLongOption("help")) {
                 if (!o->CharIs(c))

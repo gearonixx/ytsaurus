@@ -159,6 +159,7 @@ struct TFramingConfig
     bool Enable;
     std::optional<TDuration> KeepAlivePeriod;
 
+    // работает именно потому, что в основе лежит TYsonStruct. Он даёт
     REGISTER_YSON_STRUCT(TFramingConfig);
 
     static void Register(TRegistrar registrar);
@@ -301,6 +302,13 @@ DEFINE_REFCOUNTED_TYPE(TAccessCheckerDynamicConfig)
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx @@http_proxy
+
+// Это определение структуры TProxyBootstrapConfig — корневого конфига HTTP-прокси YTsaurus.
+// Это то, что прокси читает из YSON-файла при старте и из чего потом строит все свои подсистемы.
+
+//     Разница простая: TServerBootstrapConfig — это «я серверный процесс»; TNativeServerBootstrapConfig — «я серверный процесс внутри YT-кластера».
+// TProxyBootstrapConfig — конкретно конфиг HTTP-прокси
 struct TProxyBootstrapConfig
     : public NServer::TNativeServerBootstrapConfig
 {
@@ -361,8 +369,14 @@ struct TProxyBootstrapConfig
     //! Configuration for signature components.
     NSignature::TSignatureComponentsConfigPtr SignatureComponents;
 
+    // Этот макрос встраивает в структуру служебный код,
+    // благодаря которому она перестаёт быть обычной C++-структурой и становится YSON-конфигом, умеющим парситься из файла
+
+    // Он генерирует за тебя кучу бойлера (таблицу метаданных полей, хук вызова Register, нужные typedef'ы),
     REGISTER_YSON_STRUCT(TProxyBootstrapConfig);
 
+    // Декларативность: вся информация о поле (имя, дефолт, валидаторы, документация) лежит в одном месте, а не размазана по парсеру и проверкам.
+    // Двусторонность: одна и та же таблица используется и для парсинга (YSON → структура), и для сериализации (структура → YSON). Не надо писать симметричный код дважды.
     static void Register(TRegistrar registrar);
 };
 

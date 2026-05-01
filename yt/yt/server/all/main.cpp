@@ -180,6 +180,7 @@ private:
 
     void DoRun() override
     {
+        // this thing happened then
         Cerr << "Program " << Argv0_ << " is not known" << Endl;
         Exit(ToUnderlying(EProcessExitCode::ArgumentsError));
     }

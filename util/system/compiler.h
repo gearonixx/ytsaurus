@@ -109,6 +109,7 @@
         #define Y_FORCE_INLINE __forceinline
     #elif defined(__GNUC__)
         #/* Clang also defines __GNUC__ (as 4) */
+// @gearonixx
         #define Y_FORCE_INLINE inline __attribute__((__always_inline__))
     #else
         #define Y_FORCE_INLINE inline
@@ -602,6 +603,9 @@ _YandexAbort();
    It allows compilers to do hard optimization in code that uses these functions/methods.
    NOTE: as a consequence there are no reasons to discard the result of such a method or a function.
 */
+// @gearonixx
+// Не иметь побочных эффектов — ничего не пишет в глобальные переменные, не печатает, не меняет переданные ссылки/указатели, не делает I/O.
+// Возвращать одинаковый результат при одинаковом состоянии глобальной памяти — то есть результат зависит только от аргументов и того, что они указывают.
     #define Y_PURE_FUNCTION [[gnu::pure]]
 #endif
 

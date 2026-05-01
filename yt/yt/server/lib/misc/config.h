@@ -19,14 +19,59 @@ namespace NYT::NServer {
 //! A configuration for a server which does not necessarily have explicitly defined
 //! "native" cluster. Examples of non-native components are timestamp providers
 //! and discovery servers.
+    // @gearonixx
+//// Это конфиг для любого серверного процесса в YT, безотносительно его роли в кластере. Сюда попадают вещи, которые нужны вообще всем серверам
+///
+///
+///
+///
+///
+///
+///
+///
+/// @gearonixx
+///  это база для всех серверов, которые являются частью кластера YT и должны нативно с ним общаться.
+///  От него наследуются конфиги бутстрапа master-серверов, нод (data nodes, exec nodes, tablet nodes), schedulers, controller-agents и, в нашем случае, HTTP-про
 struct TServerBootstrapConfig
+
+    // @gearonixx
+    // extends the struct that can be serialized into JSON format
+
+    // любой struct который сериализируется json
+
+    // Ключевое слово virtual в наследовании в C++ нужно для решения проблемы «ромбовидного наследования» (diamond inheritance)
+    // Type Yson Struct
+    // Namespace YT
+    // Если бы TServerBootstrapConfig и TSomeOtherMixin оба наследовались от TYsonStruct невиртуально, то в TProxyBootstrapConfig оказалось бы два экземпляра TYsonStruct — по одному через каждую ветку.
+    // Это сломало бы регистрацию полей:
+    // было бы два набора зарегистрированных параметров, две таблицы метаданных, и YSON-парсер не понимал бы, в какой из них писать.
+
+    // YT принято правило: все промежуточные классы в иерархии конфигов наследуются от TYsonStruct виртуально.
+    // Это страховка на будущее — даже если сейчас ромба нет, он может появиться, когда кто-то захочет подмешать ещё одну базу.
+
+    // virtual — чтобы при множественном наследовании в наследниках не получилось несколько копий TYsonStruct,
+    // и регистрация полей через Register(TRegistrar) оставалась консистентной.
+
+    // Слово virtual говорит компилятору: «сколько бы раз TYsonStruct ни встречался в дереве наследования,
+    // держи его в одном-единственном экземпляре» — и тогда таблица полей одна, и всё работает корректно.
+
+
+    // NYTree — это namespace, в котором лежит подсистема YTree.
+    // YTree — это внутренняя библиотека YT для работы с древовидными структурированными данными (отсюда «Tree» в названии). По сути, это ядро для:
     : public virtual NYTree::TYsonStruct
-{
+    {
+    // навигации по дереву через YPath (путеподобный синтаксис вроде //sys/clusters/..., который ты видишь в Кипарисе);
+
     NBus::TBusServerConfigPtr BusServer;
     NRpc::TServerConfigPtr RpcServer;
 
     int RpcPort;
+
+
     int TvmOnlyRpcPort;
+
+
+
     int MonitoringPort;
     //! This option may be used to prevent config-containing nodes to be exposed in Orchid as a mean of security
     //! (disclosing less information about YT servers to a potential attacker).
@@ -46,7 +91,14 @@ DEFINE_REFCOUNTED_TYPE(TServerBootstrapConfig)
 struct TNativeServerBootstrapConfig
     : public NServer::TServerBootstrapConfig
 {
+    // @gearonixx
+    // ClusterConnection — конфиг нативного подключения к кластеру YT.
+    // «Нативное» здесь означает, что сервер общается с мастером и нодами по внутреннему протоколу YT (через bus/RPC
+    // ), а не как внешний клиент через HTTP-прокси.
+    // Это включает: список адресов мастер-серверов, настройки timestamp-провайдера, кэшей, обнаружения нод, ретраев и т.д.
     NApi::NNative::TConnectionCompoundConfigPtr ClusterConnection;
+    // @gearonixx
+    //
     NApi::NNative::EClusterConnectionDynamicConfigPolicy ClusterConnectionDynamicConfigPolicy;
 
     REGISTER_YSON_STRUCT(TNativeServerBootstrapConfig);
