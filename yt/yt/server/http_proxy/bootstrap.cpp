@@ -113,7 +113,11 @@ constinit const auto Logger = HttpProxyLogger;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-    // @gearonixx @@http_proxy
+// Поэтому http-proxy и нужны Acceptor_ (принимать новые TCP-подключения от клиентов) и Poller_ (читать/писать байты по уже принятым подключениям через epoll). Это I/O-фундамент любого HTTP-сервера, "HTTP" — это просто формат байтов, которые по этим сокетам летят.
+
+// @gearonixx @@http_proxy
+// HTTP — это прикладной протокол поверх TCP. TCP-соединение = сокет
+//  http-proxy, под капотом происходит ровно это: клиент открывает TCP-коннект к порту прокси (для ядра это сокет), по нему пишет байты HTTP-запроса, прокси читает байты, парсит их как HTTP, обрабатывает, пишет байты ответа обратно в тот же сокет
 TBootstrap::TBootstrap(
     TProxyBootstrapConfigPtr config,
     // сырое YSON-дерево (нужно когда какой-то компонент хочет вытащить свою секцию сам или конфиг динамический
@@ -128,6 +132,7 @@ TBootstrap::TBootstrap(
     // процесса и инициализируется до бутстрапа конкретной роли — http-proxy просто достаёт их по типу, а не пересоздаёт.
 
     // (Connection к мастеру, серверы на разных портах, координатор, аутентификацию, drivers v3/v4 и т.д.
+    // короче аналог RequestContext из userver
     IServiceLocatorPtr serviceLocator)
     // Параметры приходят по значению (TProxyBootstrapConfigPtr config — это TIntrusivePtr), std::move переносит их в поля без лишнего инкремента/декремента счётчика ссылок
     // . Стандартный паттерн "sink parameter": берёшь по значению — мувай в поле.
@@ -162,7 +167,17 @@ void TBootstrap::DoInitialize()
 {
     MonitoringServer_ = NHttp::CreateServer(Config_->CreateMonitoringHttpServerConfig());
 
+    // @gearonixx
+    // IMapNode — узел YSON-дерева типа "map" (ключ → дочерний узел).
+
+    // ит у себя структуру с текущим состоянием — какой конфиг загружен, какие соединения открыты,
+    // какие задачи выполняются, счётчики.
+    // Orchid делает эту структуру читаемой снаружи: ты с ноутбука выполняешь
+
+    // !!!
+    // Orchid — это просто способ заглянуть внутрь живого процесса через привычный интерфейс Cypress.
     IMapNodePtr orchidRoot;
+
     NMonitoring::Initialize(
         MonitoringServer_,
         ServiceLocator_->GetServiceOrThrow<NProfiling::TSolomonExporterPtr>(),
@@ -209,6 +224,14 @@ void TBootstrap::DoInitialize()
         TSolomonRegistry::Get()->SetDynamicTags({TTag{"proxy_role", role}});
     };
     setGlobalRoleTag(Coordinator_->GetSelfEntry()->Role);
+    // BIND(f, args.BIND(f, args...) создаёт TCallback, который при вызове в будущем восстановит контекст момента создания:
+    // текущий trace span (для распределённого трейсинга через Jaeger), logging tags (чтобы логи из коллбека имели те же теги, что и код, который его создал),
+    // fiber-локальные переменные. Это нужно, когда коллбек логически продолжает текущую операцию в другом треде/файбере — например, ты постишь продолжение запроса в invoker, и хочешь, чтобы трейс не разорвался.
+
+
+    // BIND_NO_PROPAGATE всё равно делает TCallback — тип YT, который умеет в weak/strong refs аргументов, складывается в IInvoker, подписывается на TCallbackList,
+    // возвращается из TFuture::Subscribe и т.д.
+    // Просто лямбду в эти места не сунешь — нужен именно TCallback.
     Coordinator_->SubscribeOnSelfRoleChanged(BIND_NO_PROPAGATE(setGlobalRoleTag));
 
     DynamicConfigManager_ = CreateDynamicConfigManager(this);
@@ -374,6 +397,10 @@ void TBootstrap::DoInitialize()
             Poller_,
             Acceptor_,
             GetControlInvoker());
+        // RegisterRoutes навешивает на сервер обработчики для всех путей API
+        // — /api/, /auth/whoami, /hosts/, /ping/, /version, /query (ClickHouse) и т
+        // .RegisterRoutes навешивает на сервер обработчики для всех путей API — /api/,
+        // /auth/whoami, /hosts/, /ping/, /version, /query (ClickHouse) и т.д. Без него сервер бы стартовал, принимал соединения и отвечал 404 на всё.
         RegisterRoutes(TvmOnlyApiHttpsServer_);
     }
 
@@ -390,6 +417,7 @@ void TBootstrap::DoInitialize()
         ChytApiHttpsServer_->AddHandler("/", AllowCors(ClickHouseHandler_));
     }
 
+    // ??
     SetNodeByYPath(
         orchidRoot,
         "/http_proxy",
@@ -605,6 +633,7 @@ const TApiPtr& TBootstrap::GetApi() const
 
 IHttpHandlerPtr TBootstrap::AllowCors(IHttpHandlerPtr nextHandler) const
 {
+    //  Это удобно, но стоит CPU и памяти на каждый вызов.
     return New<TCallbackHandler>(BIND_NO_PROPAGATE([config = Config_, nextHandler] (
         const IRequestPtr& req,
         const IResponseWriterPtr& rsp)

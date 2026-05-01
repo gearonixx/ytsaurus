@@ -554,6 +554,8 @@ private:
     }
 };
 
+    // @gearonixx @@ytree
+// virtual node
 INodePtr CreateVirtualNode(IYPathServicePtr service)
 {
     return New<TVirtualEntityNode>(service);

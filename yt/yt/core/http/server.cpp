@@ -595,6 +595,9 @@ IServerPtr CreateServer(int port, IPollerPtr poller)
 
 IServerPtr CreateServer(TServerConfigPtr config, int pollerThreadCount)
 {
+    // @gearonixx @@http INVOKER
+    // "место, куда можно постить функции на исполнение". У него один основной метод: Invoke(TClosure callback) —
+    // поставь эту лямбду в очередь, она выполнится где-то (в каком потоке, когда — определяет конкретная реализация).
     auto poller = CreateThreadPoolPoller(pollerThreadCount, config->ServerName);
     auto acceptor = poller;
     auto invoker = poller->GetInvoker();
