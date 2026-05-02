@@ -1,0 +1,28 @@
+--- a/yt/yt/server/tools/proc.cpp
++++ b/yt/yt/server/tools/proc.cpp
+@@ -229,11 +229,21 @@ void TCreateDirectoryAsRootTool::operator()(const std::string& path) const
+
+ void TCopyDirectoryContentTool::operator()(TCopyDirectoryContentConfigPtr config) const
+ {
+     SafeSetUid(0);
+
+-    execl("/usr/bin/rsync", "/usr/bin/rsync", "-q", "--perms", "--recursive", "--specials", "--links", config->Source.c_str(), config->Destination.c_str(), (void*)nullptr);
++    // Refuse positional values that look like options to prevent rsync
++    // argv-injection (e.g. --rsh=, -e, --debug=).
++    auto reject = [&] (const std::string& s, TStringBuf field) {
++        if (!s.empty() && s.front() == '-') {
++            THROW_ERROR_EXCEPTION("Invalid %v: must not start with '-'", field);
++        }
++    };
++    reject(config->Source, "source");
++    reject(config->Destination, "destination");
++
++    // The literal "--" tells rsync that everything after is a positional
++    // path, defence-in-depth in case a future option parser ignores the
++    // leading-dash check.
++    execl("/usr/bin/rsync", "/usr/bin/rsync", "-q", "--perms", "--recursive",
++          "--specials", "--links", "--",
++          config->Source.c_str(), config->Destination.c_str(), (void*)nullptr);
+
+     THROW_ERROR_EXCEPTION("Failed to copy directory %Qv to %Qv: execl failed",
+         config->Source,

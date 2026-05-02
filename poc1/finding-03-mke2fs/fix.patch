@@ -1,0 +1,32 @@
+--- a/yt/yt/server/tools/proc.cpp
++++ b/yt/yt/server/tools/proc.cpp
+@@ -437,7 +437,28 @@ void TMkFsAsRootTool::operator()(const TMkFsConfigPtr& config) const
+ {
+     // Child process
+     TrySetUid(0);
+-    execl("/usr/sbin/mke2fs", "/usr/sbin/mke2fs", "-F", "-q", "-t", config->Type.c_str(), config->Path.c_str(), (void*)nullptr);
++
++    // Reject anything that looks like an option to prevent argv-injection
++    // (e.g. -d, -O, -E, --help). mke2fs's positional `device` is the only
++    // attacker-influenced argv slot here.
++    auto isAllowedType = [] (const std::string& t) {
++        if (t.empty() || t.size() > 16) return false;
++        for (char c : t) {
++            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') return false;
++        }
++        return true;
++    };
++    if (!isAllowedType(config->Type)) {
++        THROW_ERROR_EXCEPTION("Invalid mkfs type %Qv: must match [A-Za-z0-9_]{1,16}",
++            config->Type);
++    }
++    if (config->Path.empty() || config->Path.front() != '/') {
++        THROW_ERROR_EXCEPTION("Invalid mkfs path %Qv: must be absolute",
++            config->Path);
++    }
++
++    execl("/usr/sbin/mke2fs", "/usr/sbin/mke2fs", "-F", "-q", "-t",
++          config->Type.c_str(), "--", config->Path.c_str(), (void*)nullptr);
+
+     THROW_ERROR_EXCEPTION("Failed to make filesystem for %v: execl failed",
+         config->Path) << TError::FromSystem();

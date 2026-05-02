@@ -29,6 +29,8 @@ TClientOptions TClientOptions::FromUser(std::string user, std::optional<std::str
 {
     TClientOptions options;
     options.User = std::move(user);
+    // помечает запросы тегами nightly-job, user-query (UserTag), и админы видят раздельные графики и могут крутить отдельные лимиты на каждый тег.
+    // UserTag — какая логическая группа запросов внутри этого пользователя.
     options.UserTag = std::move(userTag);
     return options;
 }

@@ -157,12 +157,27 @@ TBootstrap::TBootstrap(
 
 TBootstrap::~TBootstrap() = default;
 
+// @gearonixx
+// Старт прокси разделён на две фазы:
+//   1) DoInitialize — СОЗДАТЬ все объекты (соединения, серверы, хендлеры, координатор).
+//      Объекты сконструированы, но ещё ничего не делают: серверы не слушают порт,
+//      синхронизаторы не крутятся.
+//   2) DoStart — ВКЛЮЧИТЬ их (Start() у каждого подкомпонента). Только после этого
+//      прокси реально начинает принимать запросы.
+// Зачем разделять: если что-то упадёт на фазе init, мы упадём с понятной ошибкой
+// до того, как порт начал принимать клиентов.
 void TBootstrap::DoRun()
 {
     DoInitialize();
     DoStart();
 }
 
+// @gearonixx
+// Большая фаза «собрать все компоненты процесса». Идёт по слоям сверху вниз:
+// сначала monitoring + orchid, потом memory tracker (учёт памяти), потом
+// Connection к мастерам кластера, потом координатор/dynamic-config/RPC,
+// потом аутентификация, драйверы, и в самом конце — HTTP/HTTPS-серверы и Api.
+// Тут ничего не запускается — только конструируется и связывается.
 void TBootstrap::DoInitialize()
 {
     MonitoringServer_ = NHttp::CreateServer(Config_->CreateMonitoringHttpServerConfig());
@@ -188,10 +203,17 @@ void TBootstrap::DoInitialize()
         orchidRoot,
         "http_proxy");
 
+    // @gearonixx
+    // Опции соединения с кластером (Connection — наш клиент к мастер-серверам).
+    // RetryRequestQueueSizeLimitExceeded — если мастер ответил «очередь запросов
+    // переполнена», ретраить ли. CreateQueueConsumerRegistrationManager — включить
+    // подсистему регистрации consumer'ов на YT-очередях (нужно, чтобы прокси умела
+    // обрабатывать команды над очередями).
     NNative::TConnectionOptions connectionOptions;
     connectionOptions.RetryRequestQueueSizeLimitExceeded = Config_->RetryRequestQueueSizeLimitExceeded;
     connectionOptions.CreateQueueConsumerRegistrationManager = true;
 
+    // Учётная система памяти процесса — отслеживает, сколько байт сейчас аллоцировано и под какую категорию
     MemoryUsageTracker_ = CreateNodeMemoryTracker(
         Config_->MemoryLimits->Total.value_or(std::numeric_limits<i64>::max()),
         New<TNodeMemoryTrackerConfig>(),
@@ -201,25 +223,52 @@ void TBootstrap::DoInitialize()
         GetControlInvoker());
 
     Connection_ = CreateConnection(
+        //  ClusterConnection — конфиг нативного подключения к кластеру YT.
         Config_->ClusterConnection,
         connectionOptions,
         /*clusterDirectoryOverride*/ {},
         MemoryUsageTracker_);
 
+    // @gearonixx
+    // Часть конфига кластерного соединения (адреса мастеров, тайм-ауты)
+    // тоже умеет обновляться динамически — эта функция подписывает Connection
+    // на эти изменения, чтобы не перезапускать прокси при правке таких настроек.
     SetupClusterConnectionDynamicConfigUpdate(
         Connection_,
         Config_->ClusterConnectionDynamicConfigPolicy,
         ConfigNode_->AsMap()->GetChildOrThrow("cluster_connection"),
         Logger());
 
+    // @gearonixx
+    // Запускаем фоновые синхронизаторы каталогов кластера. «Синхронизатор» здесь —
+    // это компонент, который раз в N секунд ходит на мастер и обновляет у себя
+    // локальную копию какого-то каталога:
+    //   ClusterDirectory  — какие ВНЕШНИЕ кластеры доступны (нужно для multiproxy).
+    //   NodeDirectory     — кэш всех нод кластера (адреса для чтения чанков).
+    //   QueueConsumerRegistration — регистрации потребителей YT-очередей.
+    //   MasterCellDirectory — карта мастер-ячеек (мастер часто шардирован).
+    // Без них клиент знал бы только адреса из конфига и не реагировал на изменения.
     Connection_->GetClusterDirectorySynchronizer()->Start();
     Connection_->GetNodeDirectorySynchronizer()->Start();
     Connection_->GetQueueConsumerRegistrationManagerOrThrow()->StartSync();
     Connection_->GetMasterCellDirectorySynchronizer()->Start();
     SetupClients();
 
+    // @gearonixx
+    // Coordinator — компонент прокси, отвечающий за её регистрацию в кластере.
+    // Конкретно: он создаёт/обновляет ноду самой прокси в Cypress (//sys/proxies/...),
+    // публикует туда свою роль (data/control/...), отслеживает здоровье соседних
+    // прокси для балансировки. То есть «кто эта прокси и кто живые соседи».
     Coordinator_ = New<TCoordinator>(Config_, this);
 
+    // @gearonixx
+    // Маленький хелпер: проставляет роль прокси («proxy_role=control/data/...»)
+    // как глобальный тег на ВСЕ метрики Solomon. Solomon — система метрик
+    // Яндекса; «динамический тег» — лейбл, прибиваемый ко всем метрикам процесса
+    // на лету. Дальше в Графане можно фильтровать «покажи только control-прокси».
+    //
+    // Применяем тег сразу с текущей ролью, и подписываемся на её смену
+    // (роль может меняться: координатор переключает прокси между control и data).
     auto setGlobalRoleTag = [] (const std::string& role) {
         TSolomonRegistry::Get()->SetDynamicTags({TTag{"proxy_role", role}});
     };
@@ -228,15 +277,28 @@ void TBootstrap::DoInitialize()
     // текущий trace span (для распределённого трейсинга через Jaeger), logging tags (чтобы логи из коллбека имели те же теги, что и код, который его создал),
     // fiber-локальные переменные. Это нужно, когда коллбек логически продолжает текущую операцию в другом треде/файбере — например, ты постишь продолжение запроса в invoker, и хочешь, чтобы трейс не разорвался.
 
-
     // BIND_NO_PROPAGATE всё равно делает TCallback — тип YT, который умеет в weak/strong refs аргументов, складывается в IInvoker, подписывается на TCallbackList,
     // возвращается из TFuture::Subscribe и т.д.
     // Просто лямбду в эти места не сунешь — нужен именно TCallback.
     Coordinator_->SubscribeOnSelfRoleChanged(BIND_NO_PROPAGATE(setGlobalRoleTag));
 
+    // @gearonixx
+    // DynamicConfigManager — компонент, который читает динамическую часть
+    // конфига из Cypress (ноду в //sys/proxies/.../@dynamic_config) и оповещает
+    // подписчиков, когда админ её обновил. Сам TBootstrap подписывается на
+    // изменения, чтобы пробросить их во все компоненты — см. OnDynamicConfigChanged.
+    // MakeWeak(this) — слабая ссылка, чтобы менеджер не держал bootstrap живым.
     DynamicConfigManager_ = CreateDynamicConfigManager(this);
     DynamicConfigManager_->SubscribeBeforeConfigChanged(BIND_NO_PROPAGATE(&TBootstrap::OnDynamicConfigChanged, MakeWeak(this)));
 
+    // @gearonixx
+    // Опционально публикуем под Orchid три «окна» в живой процесс, чтобы
+    // через /orchid с ноутбука можно было посмотреть, что сейчас загружено:
+    //   /config                  — статический конфиг прокси (как при старте);
+    //   /dynamic_config_manager  — текущее состояние менеджера динамики;
+    //   /cluster_connection      — состояние подключения к мастерам.
+    // По дефолту это выключено (ExposeConfigInOrchid=false), потому что в конфиге
+    // могут лежать чувствительные вещи (токены, секреты).
     if (Config_->ExposeConfigInOrchid) {
         SetNodeByYPath(
             orchidRoot,
@@ -251,6 +313,11 @@ void TBootstrap::DoInitialize()
             "/cluster_connection",
             CreateVirtualNode(Connection_->GetOrchidService()));
     }
+    // @gearonixx
+    // HotswapManager — следит за «горячей заменой» дисков на железе (диск
+    // вынули/вставили). На прокси чаще всего не подключён, поэтому проверяем
+    // через FindService (вернёт nullptr, если сервис не зарегистрирован).
+    // Если есть — пробрасываем его состояние в Orchid.
     if (auto hotswapManager = ServiceLocator_->FindService<NDiskManager::IHotswapManagerPtr>()) {
         SetNodeByYPath(
             orchidRoot,
@@ -408,6 +475,12 @@ void TBootstrap::DoInitialize()
         Config_->ChytHttpServer->ServerName = "ChytHttpApi";
         ChytApiHttpServer_ = NHttp::CreateServer(Config_->ChytHttpServer, Poller_, Acceptor_);
         // Single handler.
+        // @gearonixx
+        // >> whyyy single handler?
+        // Причина: CHYT — это ClickHouse-over-YT, и его HTTP-протокол это протокол ClickHouse. Клиенты ClickHouse шлют запросы на разные пути
+        // (/, /?query=..., /ping, etc), и весь этот протокол целиком обрабатывает ClickHouseHandler сам —
+        // внутри он смотрит на путь и query string и решает что делать.
+        // Прокси не должна вмешиваться и роутить отдельные пути в свои хендлеры — иначе сломает совместимость с CH-клиентами.
         ChytApiHttpServer_->AddHandler("/", AllowCors(ClickHouseHandler_));
     }
 
@@ -418,22 +491,39 @@ void TBootstrap::DoInitialize()
     }
 
     // ??
+    // Виртуальный узел — это узел Orchid-дерева, содержимое которого вычисляется на лету в момент запроса, а не хранится статически.
+    //  "в дереве orchidRoot по пути /http_proxy положи virtualNode".
     SetNodeByYPath(
         orchidRoot,
         "/http_proxy",
         CreateVirtualNode(Api_->CreateOrchidService()));
 
+    // @gearonixx
+    // Heap profiler — инструмент, который отвечает на вопрос "кто именно сейчас держит память в куче". Он сэмплирует ал
+    // Профайлер — инструмент, который собирает данные о работе программы для анализа узких мест
     HttpProxyHeapUsageProfiler_ = New<TProxyHeapUsageProfiler>(
         GetControlInvoker(),
         Config_->HeapProfiler);
 }
 
+// @gearonixx
+//  принадлежит ли переданный сетевой адрес одному из CHYT-серверов прокси (HTTP или HTTPS-варианту).
+//  Используется чтобы по адресу входящего соединения понять "это запрос к CHYT-эндпоинту?"
 bool TBootstrap::IsChytApiServerAddress(const NNet::TNetworkAddress& address) const
 {
+    // парсится как:
+    // ChytApiHttpServer_ && (address == ChytApiHttpServer_->GetAddress())
     return (ChytApiHttpServer_ && address == ChytApiHttpServer_->GetAddress())
         || (ChytApiHttpsServer_ && address == ChytApiHttpsServer_->GetAddress());
 }
 
+
+// @gearonixx
+// "Bootstrap" в инженерном смысле — "стартовая последовательность, которая поднимает систему с нуля до рабочего состояния"
+//
+
+// @gearonixx
+// создает рутового YT-клиента — клиента, который ходит в кластер от имени системного пользователя root (с максимальными правами)
 void TBootstrap::SetupClients()
 {
     auto options = NApi::TClientOptions::FromUser(NSecurityClient::RootUserName);
@@ -442,6 +532,13 @@ void TBootstrap::SetupClients()
     NLogging::GetDynamicTableLogWriterFactory()->SetClient(RootClient_);
 }
 
+// @gearonixx
+// Перевыставляет лимиты памяти на лету. Memory tracker работает через «бюджеты»:
+// есть общий лимит на процесс и подкатегории (например, HeavyRequest — большие
+// запросы типа write_table). Конфиг задаёт не абсолютные числа, а доли (ratio),
+// которые умножаются на общий memoryLimit. Пример: ratio=0.3 при limit=100 ГБ →
+// 30 ГБ под HeavyRequest. Это позволяет менять лимиты «пропорционально» через
+// один общий ползунок.
 void TBootstrap::ReconfigureMemoryUsageTracker(
     i64 memoryLimit,
     const TMemoryLimitRatiosConfigPtr& memoryLimitRatios,
@@ -458,6 +555,19 @@ void TBootstrap::ReconfigureMemoryUsageTracker(
     MemoryUsageTracker_->Reconfigure(newConfig);
 }
 
+// @gearonixx
+// Колбэк, который дёргается при смене динамического конфига кластера.
+// «Динамический конфиг» в YT — это часть настроек, которую можно менять на лету,
+// не перезапуская процесс: админ обновляет ноду в Cypress, DynamicConfigManager
+// замечает это и зовёт всех подписчиков с новым значением.
+//
+// Здесь мы пробрасываем новые значения во все компоненты, которые умеют
+// перенастраиваться: общий менеджер синглтонов YT, memory tracker, BusServer,
+// trace sampler (сэмплинг для распределённого трейсинга), signature components,
+// синхронизатор каталога мастер-ячеек.
+//
+// DynamicConfig_.Store(newConfig) — атомарная подмена текущего хранимого конфига
+// (TAtomicIntrusivePtr делает это безопасно для читателей в других потоках).
 void TBootstrap::OnDynamicConfigChanged(
     const TProxyDynamicConfigPtr& /*oldConfig*/,
     const TProxyDynamicConfigPtr& newConfig)
@@ -493,13 +603,23 @@ void TBootstrap::OnDynamicConfigChanged(
         newConfig->MasterCellDirectorySynchronizer.value_or(Config_->ClusterConnection->Static->MasterCellDirectorySynchronizer));
 }
 
+
+// @gearonixx
+
+// Переписать на userver значит сломать совместимость со всем остальным кодом YT (мастер, ноды, скедулер)
+// и потерять оптимизации, которые делались под их сценарии нагрузки.
+
 void TBootstrap::HandleRequest(
     const NHttp::IRequestPtr& req,
     const NHttp::IResponseWriterPtr& rsp)
 {
     rsp->SetStatus(EStatusCode::OK);
+
+    // service отдаёт JSON со временем старта и версией, всё остальное (включая /version) — просто строку с версией.
     if (req->GetUrl().Path == "/service") {
+        // reply json is a helper in the http module
         ReplyJson(rsp, [&] (NYson::IYsonConsumer* json) {
+            // oh ok
             BuildYsonFluently(json)
                 .BeginMap()
                     .Item("start_time").Value(StartTime_)
@@ -507,11 +627,29 @@ void TBootstrap::HandleRequest(
                 .EndMap();
         });
     } else {
+        // @gearonixx
+        // >> TSharedRef это аналог std::shared_ptr?
+        // Не аналог, а построен поверх него. std::shared_ptr — это shared-ownership на один объект.
+        // TSharedRef — это shared-ownership на диапазон байт: пара (указатель + размер) плюс shared_ptr-подобный холдер, который держит буфер живым.
+        // write body returns the TfFuture<void> and accepts the TSharedRef small body
         WaitFor(rsp->WriteBody(TSharedRef::FromString(GetVersion())))
             .ThrowOnError();
     }
 }
 
+// @gearonixx
+// Публичная точка запуска прокси (зовётся из main). Возвращает TFuture<void> —
+// «обещание, которое завершится, когда прокси поднимется» (или с ошибкой).
+//
+// Разбор паттерна:
+//   BIND(&DoRun, MakeStrong(this)) — оборачивает метод DoRun в TCallback с захватом
+//      сильной ссылки на this (чтобы объект не умер, пока работа не закончилась).
+//   .AsyncVia(GetControlInvoker()) — говорит «выполни этот колбэк в Control-потоке»
+//      (control invoker — это та однопоточная очередь TActionQueue("Control"),
+//      где у нас идут все управляющие операции).
+//   .Run() — отправляет колбэк в очередь и сразу возвращает фьючер.
+// То есть main вызывает Run(), сразу получает фьючер и может его дождаться,
+// а реальный DoRun уже исполняется на отдельном потоке.
 TFuture<void> TBootstrap::Run()
 {
     return BIND(&TBootstrap::DoRun, MakeStrong(this))
@@ -519,6 +657,11 @@ TFuture<void> TBootstrap::Run()
         .Run();
 }
 
+// @gearonixx
+// Вторая фаза запуска: всё уже сконструировано в DoInitialize, теперь дёргаем
+// Start() у каждого живого компонента в правильном порядке. После этого:
+// серверы начинают слушать порт и принимать соединения, синхронизаторы
+// крутятся в фоне, координатор регистрируется в Cypress как живая прокси.
 void TBootstrap::DoStart()
 {
     DynamicConfigManager_->Start();
@@ -596,6 +739,11 @@ const TCoordinatorPtr& TBootstrap::GetCoordinator() const
     return Coordinator_;
 }
 
+// @gearonixx
+// the constant getters
+
+// компонент, который проверяет, имеет ли пользователь право ходить через эту конкретную прокси.
+// Это отдельная проверка от обычных ACL на объекты Cypress: даже если у юзера есть права на чтение таблицы, прокси может его не пустить.
 const IAccessCheckerPtr& TBootstrap::GetAccessChecker() const
 {
     return AccessChecker_;
@@ -631,9 +779,25 @@ const TApiPtr& TBootstrap::GetApi() const
     return Api_;
 }
 
+// we stopped here
+// Да, ровно middleware. Б
+//
+// @gearonixx
+// CORS (Cross-Origin Resource Sharing) — браузерный механизм безопасности:
+// если страница на foo.com хочет дёрнуть API на bar.com, браузер сначала
+// шлёт preflight-запрос (OPTIONS) и проверяет в ответных заголовках, разрешает ли
+// сервер такой кросс-доменный вызов. Без правильных CORS-заголовков браузер
+// просто заблокирует ответ.
+//
+// AllowCors — middleware-обёртка вокруг любого хендлера. Возвращает новый хендлер,
+// который сначала пробует обработать CORS (MaybeHandleCors сам вернёт ответ для
+// preflight'а или подмешает заголовки), а если запрос не CORS — пробрасывает
+// дальше в nextHandler. Используется в RegisterRoutes, чтобы обернуть
+// все API-эндпоинты разом.
 IHttpHandlerPtr TBootstrap::AllowCors(IHttpHandlerPtr nextHandler) const
 {
     //  Это удобно, но стоит CPU и памяти на каждый вызов.
+    // TCallbackHandler ждёт TCallback<void(IRequestPtr, IResponseWriterPtr)> — тип YT-коллбека. Голую лямбду туда не передашь, нужен BIND или BIND_NO_PROPAGATE, чтобы получить TCallback.
     return New<TCallbackHandler>(BIND_NO_PROPAGATE([config = Config_, nextHandler] (
         const IRequestPtr& req,
         const IResponseWriterPtr& rsp)
@@ -646,6 +810,26 @@ IHttpHandlerPtr TBootstrap::AllowCors(IHttpHandlerPtr nextHandler) const
     }));
 }
 
+// @gearonixx
+// Навешивает на HTTP-сервер карту «путь → хендлер». Вызывается отдельно для
+// каждого варианта сервера (HTTP, HTTPS, TVM-only), поэтому одна функция —
+// одна точка правды по роутам.
+//
+// Что куда:
+//   /auth/whoami         — узнать, кем меня видит прокси (отдаёт HttpAuthenticator).
+//   /api/                — основной YT API (этот префикс ловит весь /api/v3/...,
+//                          /api/v4/...; обрабатывает TApi).
+//   /hosts/              — список живых прокси (для клиентского балансировщика).
+//   /cluster_connection/ — раздаёт конфиг подключения к кластеру.
+//   /ping/               — health check.
+//   /login/              — логин через Cypress-cookie (если включён).
+//   /internal/discover_versions/v2 — версии всех компонентов кластера.
+//   /solomon_proxy       — проксирование метрик в Solomon.
+//   /version, /service   — отдаёт сам TBootstrap (см. HandleRequest).
+//   /query, /chyt        — ClickHouse over YT.
+//   /, /ui, /auth        — редиректы в UI, если задан UIRedirectUrl.
+//
+// Все API-роуты обёрнуты в AllowCors, чтобы работали из браузера.
 void TBootstrap::RegisterRoutes(const NHttp::IServerPtr& server)
 {
     server->AddHandler("/auth/whoami", AllowCors(HttpAuthenticator_));
@@ -668,29 +852,35 @@ void TBootstrap::RegisterRoutes(const NHttp::IServerPtr& server)
     server->AddHandler("/query", AllowCors(ClickHouseHandler_));
     server->AddHandler("/chyt", AllowCors(ClickHouseHandler_));
 
+    // "Если в конфиге задан UIRedirectUrl" (непустая строка). Только тогда регистрируется хендлер с редиректами.
     if (!Config_->UIRedirectUrl.empty()) {
         server->AddHandler("/", New<TCallbackHandler>(BIND([config = Config_] (
             const IRequestPtr& req,
             const IResponseWriterPtr& rsp)
         {
+            // Это отражает разницу в их роли. Запрос — уже готовая штука: ядро/HTTP-парсер прочитал заголовки, тело, оформил всё в IRequest,
+            // ты только читаешь его поля. Поэтому имя простое — IRequest.
             if (req->GetUrl().Path == "/auth" || req->GetUrl().Path == "/auth/") {
                 rsp->SetStatus(EStatusCode::SeeOther);
                 rsp->GetHeaders()->Add("Location", "https://oauth.yt.yandex.net");
             } else if (req->GetUrl().Path == "/" || req->GetUrl().Path == "/ui") {
                 rsp->SetStatus(EStatusCode::SeeOther);
+                // UIRedirectUrl — строка из конфига прокси, URL фронтенда YT-кластера, куда редиректить пользователей,
+                // которые случайно открыли API-прокси в браузере. Например, на проде это что-то типа https://yt.yandex-team.ru/hahn.
                 rsp->GetHeaders()->Add("Location", config->UIRedirectUrl + "?" + req->GetUrl().RawQuery);
             } else {
                 rsp->SetStatus(EStatusCode::NotFound);
             }
 
-            WaitFor(rsp->Close())
+            WaitFor(rsp-> Close())
                 .ThrowOnError();
         })));
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
+/// @gearonixx
+// Зачем так: спрятать детали реализации. Кому-то снаружи не нужно знать про все 30 полей TBootstrap, инклюдить тяжёлые хедеры и зависеть от них
 TBootstrapPtr CreateHttpProxyBootstrap(
     TProxyBootstrapConfigPtr config,
     INodePtr configNode,

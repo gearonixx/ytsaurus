@@ -29,6 +29,9 @@ inline const std::string AccessControlMaxAgeHeaderName("Access-Control-Max-Age")
 inline const std::string AuthorizationHeaderName("Authorization");
 inline const std::string CacheControlHeaderName("Cache-Control");
 inline const std::string ContentRangeHeaderName("Content-Range");
+// @gearonixx
+//  без inline каждый .cpp, который его подключает,
+//  получил бы свою копию переменной (или была бы ошибка линкера на multiple definition).
 inline const std::string ContentTypeHeaderName("Content-Type");
 inline const std::string CookieHeaderName("Cookie");
 inline const std::string ExpiresHeaderName("Expires");

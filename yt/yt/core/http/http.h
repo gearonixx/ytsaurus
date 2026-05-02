@@ -226,6 +226,7 @@ void ValidateHeaderValue(TStringBuf header, TStringBuf value);
 
 struct IRequest
     : public virtual TRefCounted
+    //— интерфейс асинхронного входного потока с zero-copy чтением.
     , public virtual NConcurrency::IAsyncZeroCopyInputStream
 {
     virtual std::pair<int, int> GetVersion() = 0;
@@ -252,7 +253,13 @@ struct IRequest
 DEFINE_REFCOUNTED_TYPE(IRequest)
 
 ////////////////////////////////////////////////////////////////////////////////
-
+///
+///// @gearonixx
+///
+/// TRefCounted
+// Потому что один и тот же IResponseWriter живёт дольше одного фрейма стека и шарится между несколькими владельцами.
+// Сценарий: HTTP-фреймворк создаёт writer для ответа, передаёт его в хендлер, хендлер захватывает его в лямбду и постит асинхронную операцию
+// (WaitFor(rsp->WriteBody(...))), может пробросить дальше в middleware (CORS, аутентификация). Каждое из этих мест должно держать writer живым, пока работает.
 struct IResponseWriter
     : public virtual TRefCounted
     , public virtual NConcurrency::IFlushableAsyncOutputStream
@@ -271,6 +278,8 @@ struct IResponseWriter
 };
 
 DEFINE_REFCOUNTED_TYPE(IResponseWriter)
+    // ??
+    // ??
 
 ////////////////////////////////////////////////////////////////////////////////
 

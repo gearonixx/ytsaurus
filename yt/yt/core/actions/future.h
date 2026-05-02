@@ -835,6 +835,8 @@ bool IsContextSwitchInFutureHandlerForbidden();
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx @@concepts
+// ???
 template <class T>
 concept CFuture = NDetail::IsFuture<T>;
 

@@ -1,0 +1,21 @@
+{
+    "typeCheckingMode": "off",
+    "extraPaths": [
+        "/workspace/ytsaurus",
+        "/workspace/ytsaurus-vscode/.links/._26316fe6",
+        "/workspace/ytsaurus-vscode/.links/._2db4523c",
+        "/workspace/ytsaurus-vscode/.links/._3759660e",
+        "/workspace/ytsaurus-vscode/.links/._41844227",
+        "/workspace/ytsaurus-vscode/.links/._6104ebc0",
+        "/workspace/ytsaurus-vscode/.links/._670defcf",
+        "/workspace/ytsaurus-vscode/.links/._69e140b4",
+        "/workspace/ytsaurus-vscode/.links/._6c4a41af",
+        "/workspace/ytsaurus-vscode/.links/._86783df9",
+        "/workspace/ytsaurus-vscode/.links/._8e4809be",
+        "/workspace/ytsaurus-vscode/.links/._b8396b26",
+        "/workspace/ytsaurus-vscode/.links/yt_record_codegen.bin_e448e1eb",
+        "/workspace/ytsaurus-vscode/.links/yt_record_codegen.lib_bb4caa27",
+        "/workspace/ytsaurus-vscode/.links/yt_record_codegen_470db1a6",
+        "/workspace/ytsaurus-vscode/.links/yt_record_render.lib_c3d6c181"
+    ]
+}

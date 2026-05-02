@@ -53,6 +53,7 @@ void TSolomonProxyConfig::Register(TRegistrar registrar)
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx ???
 void TCoordinatorConfig::Register(TRegistrar registrar)
 {
     registrar.Parameter("enable", &TThis::Enable)

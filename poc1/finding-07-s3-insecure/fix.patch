@@ -1,0 +1,24 @@
+--- a/yt/yt/tools/import_table/lib/import_table.cpp
++++ b/yt/yt/tools/import_table/lib/import_table.cpp
+@@ -147,12 +147,18 @@ NS3::IClientPtr CreateS3Client(
+     clientConfig->Url = std::move(s3Config.Url);
+     clientConfig->Region = std::move(s3Config.Region);
+
+-    auto sslConfig = NYT::New<NYT::NCrypto::TSslContextConfig>();
+-    sslConfig->InsecureSkipVerify = true;
++    // Use the system trust store. If a private CA is needed, plumb it
++    // through TS3Config.CertAuthority -> TSslContextConfig::CertAuthority.
++    // Do NOT hard-disable verification — that exposes long-lived AWS
++    // credentials to any on-path attacker.
++    auto sslConfig = NYT::New<NYT::NCrypto::TSslContextConfig>();
++    if (s3Config.CertAuthority) {
++        sslConfig->CertAuthority = s3Config.CertAuthority;
++    }
+
+     auto poller = CreateThreadPoolPoller(1, "S3Poller");
+     auto client = NS3::CreateClient(
+         std::move(clientConfig),
+         std::move(credentialProvider),
+         sslConfig,
+         poller,
+         poller->GetInvoker());

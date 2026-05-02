@@ -10,12 +10,20 @@ namespace NYT::NRpc {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx
+//     GetAuthenticationIdentity() возвращает структуру с парой (User, UserTag) — то есть полную identity, включая тег для квотирования
 struct TAuthenticationIdentity
 {
     TAuthenticationIdentity() = default;
     explicit TAuthenticationIdentity(const std::string& user, const std::string& userTag = {});
 
     bool operator==(const TAuthenticationIdentity& other) const = default;
+
+    // @gearonixx @@UPSTREAM
+
+    // Почему не сделали сразу: исторически написали со строкой, оно везде используется,
+    // рефакторинг — это апдейт всех мест чтения (if (tag.empty()) → if (!tag.has_value())),
+    // сериализаций, сравнений. TODO висит как напоминание, что хорошо бы починить, но не критично.
 
     // TODO(babenko): consider wrapping with std::optional
     std::string User;

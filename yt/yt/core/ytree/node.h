@@ -13,6 +13,7 @@ namespace NYT::NYTree {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx
 //! A base DOM-like interface representing a node.
 struct INode
     : public virtual IYPathService

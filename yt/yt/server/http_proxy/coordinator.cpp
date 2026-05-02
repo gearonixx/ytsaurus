@@ -530,6 +530,10 @@ TDuration TCoordinator::GetDeathAge() const
 
 TCoordinatorProxyPtr TCoordinator::GetSelf() const
 {
+    // @gearonixx
+    //  Метод TAtomicIntrusivePtr — атомарно читает указатель и инкрементит его счётчик ссылок,
+    //  возвращая TIntrusivePtr. Без этого был бы race: пока ты копируешь сырой указатель, другой поток может обнулить объект,
+    // и ты получишь висячую ссылку.
     return Self_.Acquire();
 }
 

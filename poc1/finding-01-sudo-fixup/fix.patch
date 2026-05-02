@@ -1,0 +1,81 @@
+--- a/yt/yt/tools/yt_sudo_fixup/main.cpp
++++ b/yt/yt/tools/yt_sudo_fixup/main.cpp
+@@ -1,22 +1,73 @@
+ #include <sys/types.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <stdio.h>
++#include <string.h>
++#include <errno.h>
++
++// Allowlist of commands this wrapper is allowed to invoke.
++// Anything not on this list must be added explicitly with review.
++static const char* const kAllowedCommands[] = {
++    "/bin/mount",
++    "/bin/umount",
++    "/usr/sbin/mke2fs",
++    "/bin/rm",
++    "/usr/bin/rsync",
++    NULL,
++};
++
++static int IsAllowedCommand(const char* path) {
++    for (int i = 0; kAllowedCommands[i]; ++i) {
++        if (strcmp(path, kAllowedCommands[i]) == 0) return 1;
++    }
++    return 0;
++}
++
++// Authenticate caller via SO_PEERCRED on a unix-domain socket inherited as fd 3.
++// The YT node opens the socket, forks, dup2's it to fd 3 in the child, then
++// execve's this wrapper. Any caller without a recognised peer credential is
++// refused.
++static int AuthenticateCaller(uid_t* outRealUid) {
++    struct ucred cred;
++    socklen_t len = sizeof(cred);
++    if (getsockopt(3, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
++        fprintf(stderr, "yt-sudo-fixup: missing or invalid caller socket on fd 3: %s\n",
++                strerror(errno));
++        return -1;
++    }
++    *outRealUid = cred.uid;
++    return 0;
++}
+
+ int main(int argc, char* argv[])
+ {
+-    if (argc < 3) {
+-        fprintf(stderr, "usage: yt-sudo-wrapper UID CMD [ARGS]\n");
++    if (argc < 2) {
++        fprintf(stderr, "usage: yt-sudo-wrapper CMD [ARGS]\n");
++        fprintf(stderr, "       caller is authenticated via SO_PEERCRED on fd 3.\n");
+         return 2;
+     }
+
+-    int realUid = atoi(argv[1]);
++    uid_t realUid = 0;
++    if (AuthenticateCaller(&realUid) != 0) {
++        return 1;
++    }
++    if (realUid == 0) {
++        fprintf(stderr, "yt-sudo-fixup: refuse to escalate from uid 0\n");
++        return 1;
++    }
++
++    if (!IsAllowedCommand(argv[1])) {
++        fprintf(stderr, "yt-sudo-fixup: command %s not in allowlist\n", argv[1]);
++        return 1;
++    }
++
+     if (setreuid(realUid, 0) != 0) {
+         perror("setreuid");
+         return 1;
+     }
+
+-    execv(argv[2], argv+3);
++    execv(argv[1], argv+1);
+     perror("exec");
+     return 1;
+ }

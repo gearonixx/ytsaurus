@@ -14,6 +14,8 @@ namespace NYT::NAuth {
 
 struct TAuthenticationOptions
 {
+    // GetAuthenticatedUser() возвращает только имя пользователя — строку.
+    // GetAuthenticationIdentity() возвращает структуру с парой (User, UserTag) — то есть полную identity, включая тег для квотирования
     const std::string& GetAuthenticatedUser() const;
     NRpc::TAuthenticationIdentity GetAuthenticationIdentity() const;
 

@@ -150,6 +150,7 @@ public:
     //! No data is being copied in #FromString itself but since #str is passed by value
     //! a copy may occur at caller's side.
     //! The memory is marked with a given tag.
+    // @gearonixx btw static from here
     template <class TTag>
     static TSharedRef FromString(std::string str);
 

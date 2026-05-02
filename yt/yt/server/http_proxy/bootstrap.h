@@ -172,7 +172,11 @@ private:
 DEFINE_REFCOUNTED_TYPE(TBootstrap)
 
 ////////////////////////////////////////////////////////////////////////////////
+///
+/// @gearonixx
+/// Объявление CreateHttpProxyBootstrap лежит в публичном хедере, определение TBootstrap — в приватном.
 
+// Тогда зачем фабрика здесь: главным образом для единообразия (в YT почти везде объекты создаются через CreateXxx(...)-фабрики, а не New<TXxx>(...) напрямую
 TBootstrapPtr CreateHttpProxyBootstrap(
     TProxyBootstrapConfigPtr config,
     NYTree::INodePtr configNode,

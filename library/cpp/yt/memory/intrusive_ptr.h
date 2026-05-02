@@ -29,6 +29,9 @@ public:
 
     //! Constructor from an unqualified reference.
     /*!
+     * // @gearonixx @@UPSTREAM
+     * typo here
+     *
      * Note that this constructor could be racy due to unsynchronized operations
      * on the object and on the counter.
      *
@@ -186,6 +189,8 @@ private:
 
     T* T_ = nullptr;
 
+    // @gearonixx
+    // если ты кастуешь TIntrusivePtr<U> в TIntrusivePtr<T> и T != U, то T обязан наследоваться от TRefCountedBase
     template <class U>
     static constexpr void ValidateCastFrom() noexcept
     {

@@ -52,6 +52,7 @@ struct IServer
         const std::string& pattern,
         const IHttpHandlerPtr& handler) = 0;
 
+    // @gearonixx
     //! Returns the address this server listens at.
     virtual const NNet::TNetworkAddress& GetAddress() const = 0;
 

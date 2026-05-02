@@ -8,7 +8,7 @@ namespace NYT::NSignature {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-struct ISignatureGenerator
+struct ISignastureGenerator
     : public TRefCounted
 {
     [[nodiscard]] TSignaturePtr Sign(std::string payload) const;

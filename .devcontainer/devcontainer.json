@@ -1,0 +1,14 @@
+{
+    "name": "YTsaurus Dev",
+    "dockerFile": "../dev/Dockerfile",
+    "context": "..",
+    "workspaceFolder": "/workspace/ytsaurus",
+    "forwardPorts": [2222],
+    "remoteUser": "dev",
+    "postStartCommand": "sudo ssh-keygen -A -q 2>/dev/null; sudo mkdir -p /run/sshd; sudo /usr/sbin/sshd -f /etc/ssh/sshd_config 2>/dev/null || true",
+    "customizations": {
+        "jetbrains": {
+            "backend": "CLion"
+        }
+    }
+}

@@ -202,6 +202,7 @@ static const auto HeadersWhitelist = JoinSeq(", ", std::vector<std::string>{
     "X-YT-User-Tag",
 });
 
+// known headers
 static const std::vector<std::string> KnownHeaders = {
     AcceptHeaderName,
     AccessControlAllowCredentialsHeaderName,
@@ -373,10 +374,14 @@ void ReplyJson(const IResponseWriterPtr& rsp, std::function<void(NYson::IYsonCon
 {
     rsp->GetHeaders()->Set(ContentTypeHeaderName, ApplicationJsonContentType);
 
+    // Да, на этот момент в out пусто. CreateJsonConsumer создаёт consumer'а
     TBufferOutput out;
 
     auto json = NJson::CreateJsonConsumer(&out);
     producer(json.get());
+    //
+    // Flush дописывает в out всё, что consumer ещё держит во внутренних буферах, и завершает текущие открытые структуры если надо.
+    // Flush дописывает в out всё, что consumer ещё держит во внутренних буферах, и завершает текущие открытые структуры если надо. После Flush out гарантированно содержит полный валидный JSON.
     json->Flush();
 
     TString body;

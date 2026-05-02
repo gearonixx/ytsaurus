@@ -17,8 +17,18 @@ TErrorOr<typename TFuture::TValueType> WaitFor(TFuture future, IInvokerPtr invok
     YT_ASSERT(future);
     YT_ASSERT(invoker);
 
+    // @gearonixx @@concurrency
+    // wait_until_set(future.as_void(), invoker)  # уступает файбер пока future не готов
+    // # засыпаем пока future не готов, OS-тред в это время делает другую работу
+
+    // Конвертирует TFuture<T> в TFuture<void>
+
+    // WaitUntilSet принимает только TFuture<void>,
+    // потому что ему плевать на тип результата, ему нужно только "когда"
     WaitUntilSet(future.AsVoid(), std::move(invoker));
 
+    //  # TErrorOr<T>: либо значение, либо ошибка
+    //  return future.result()
     return future.GetOrCrash();
 }
 

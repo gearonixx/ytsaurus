@@ -1,0 +1,49 @@
+--- a/yt/yt/core/crypto/tls.cpp
++++ b/yt/yt/core/crypto/tls.cpp
+@@ -640,16 +640,30 @@ public:
+     TFuture<IConnectionPtr> Dial(const TNetworkAddress& remoteAddress, TDialerContextPtr context) override
+     {
++        // Refuse to dial without an explicit hostname. SSL_set1_host is the
++        // only thing that binds the peer cert to a name; without it we
++        // accept any cert that chains to a trusted CA, which is the classic
++        // missing-hostname-check MITM bug.
++        if (!Context_->IsInsecureSkipVerify()
++            && (!context || !context->Host)
++            && !context->SkipHostnameCheck)
++        {
++            return MakeFuture<IConnectionPtr>(TError(
++                "TLS dial requires a Host in the dialer context "
++                "(set context->SkipHostnameCheck explicitly to override)"));
++        }
++
+         return Underlying_->Dial(remoteAddress).Apply(BIND(
+             [
+                 ctx = Context_,
+                 poller = Poller_,
+                 context = std::move(context),
+                 allowBypassTls = AllowBypassTls_,
+                 insecureSkipVerify = Context_->IsInsecureSkipVerify()
+             ] (const IConnectionPtr& underlying) -> IConnectionPtr {
+                 if (allowBypassTls && context->BypassTls) {
+                     return underlying;
+                 }
+                 auto connection = New<TTlsConnection>(ctx, poller, underlying);
+                 if (context && context->Host) {
+                     connection->SetHost(*context->Host);
+                 }
+                 connection->StartClient(insecureSkipVerify);
+                 return connection;
+             }));
+     }
+
+--- a/yt/yt/core/net/dialer.h
++++ b/yt/yt/core/net/dialer.h
+@@ ... @@ struct TDialerContext
+ {
+     std::optional<std::string> Host;
+     bool BypassTls = false;
++    // Explicit opt-out for the rare case where the caller cannot supply a
++    // host (e.g. dialing an IP literal in a test). MUST NOT be set in
++    // production paths.
++    bool SkipHostnameCheck = false;
+ };

@@ -24,6 +24,15 @@ namespace NYT::NHttpProxy {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx
+
+// UpdatedAt — момент снятия снимка; по этой метке другие прокси решают «жив/мёртв».
+// LoadAverage — системный load average, средняя длина очереди готовых процессов.
+// NetworkCoef — коэффициент сетевой нагрузки.
+// UserCpu — доля CPU в юзерспейсе.
+// SystemCpu — доля CPU в ядре.
+// CpuWait — доля CPU в ожидании io.
+// ConcurrentRequests — сколько HTTP-запросов сейчас в обработке.
 struct TLiveness
     : public NYTree::TYsonStruct
 {
@@ -41,11 +50,29 @@ struct TLiveness
 DEFINE_REFCOUNTED_TYPE(TLiveness)
 
 ////////////////////////////////////////////////////////////////////////////////
+///
+///
+// ● Запись об одной прокси в реестре //sys/proxies/<host>:
+// её endpoint, роль, флаг бана и Liveness (CPU, load, число запросов).
+// YSON-структура — сериализуется в Cypress и читается оттуда другими прокси, чтобы
+//   знать состояние соседей.
+
+//   ● Да, отдельный процесс на своём хосте — ytserver-http-proxy. Их пускают пачкой (десятки штук), они стоят перед кластером YT и принимают HTTP от клиентов, потом форвардят как RPC в мастер/ноды. Координатор
+// как раз и нужен, чтобы эти прокси знали друг про друга.
+
+//  ❯ компьютеры или процессы?
+//
+// ● Процессы. Один хост может крутить несколько прокси (на разных портах), но обычно 1 процесс = 1 машина.
 
 struct TProxyEntry
     : public NYTree::TYsonStruct
 {
+
+  //   Endpoint — адрес прокси (host:port), по которому к ней ходят клиенты. Role — логическая группа (data, control, default...), клиент в /hosts?role=data получит только прокси с этой ролью. Liveness — снимок
+  // текущей нагрузки (CPU, load average, число активных запросов), по нему координатор балансирует и решает, кто «жив».
     std::string Endpoint;
+    // етка-группа прокси: админ ставит роль в //sys/proxies/<host>/@role, и клиент запросом /hosts?role=data получает только прокси с этой ролью. Так разделяют трафик — например, тяжёлые батчи на одни прокси,
+    // интерактив на другие.
     std::string Role;
 
     TLivenessPtr Liveness;
@@ -76,7 +103,10 @@ struct TCoordinatorProxy
 DEFINE_REFCOUNTED_TYPE(TCoordinatorProxy)
 
 ////////////////////////////////////////////////////////////////////////////////
-
+///
+/// отому что на координатор держат TIntrusivePtr сразу несколько владельцев (TBootstrap, хендлеры /hosts и /ping, TAccessChecker, фоновые периодики),
+/// и время жизни не привязано к одному из них — объект должен
+// жить, пока есть хоть одна ссылка. TRefCounted даёт встроенный счётчик ссылок, на котором работает TIntrusivePtr (дешевле shared_ptr, счётчик в самом
 class TCoordinator
     : public TRefCounted
 {
@@ -120,6 +150,8 @@ private:
 
     const TPromise<void> FirstUpdateIterationFinished_ = NewPromise<void>();
 
+    // @gearonixx @@custom
+    // the "self" proxy
     TAtomicIntrusivePtr<TCoordinatorProxy> Self_;
 
     YT_DECLARE_SPIN_LOCK(NThreading::TSpinLock, ProxiesLock_);

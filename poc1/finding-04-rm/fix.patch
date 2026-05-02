@@ -1,0 +1,24 @@
+--- a/yt/yt/server/tools/proc.cpp
++++ b/yt/yt/server/tools/proc.cpp
+@@ -45,11 +45,21 @@ void TKillAllByUidTool::operator()(int uid) const
+
+ void TRemoveDirAsRootTool::operator()(const std::string& path) const
+ {
+     // Child process
+     TrySetUid(0);
+-    execl("/bin/rm", "/bin/rm", "-rf", path.c_str(), (void*)nullptr);
++
++    // Refuse paths that could be parsed by rm as options or that traverse
++    // outside an absolute prefix.
++    if (path.empty() || path.front() != '/') {
++        THROW_ERROR_EXCEPTION("Invalid path %v: must be absolute", path);
++    }
++    if (path.find("/../") != std::string::npos || path == "/" ||
++        path.size() >= 2 && path[0] == '/' && path[1] == '\0') {
++        THROW_ERROR_EXCEPTION("Invalid path %v", path);
++    }
++    execl("/bin/rm", "/bin/rm", "-rf", "--", path.c_str(), (void*)nullptr);
+
+     THROW_ERROR_EXCEPTION("Failed to remove directory %v: execl failed",
+         path) << TError::FromSystem();
+ }
