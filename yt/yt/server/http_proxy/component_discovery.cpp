@@ -25,6 +25,10 @@ void FillMasterReadOptions(TMasterReadOptions& options, const TMasterReadOptions
     options = value;
 }
 
+// @gearonixx @AI_GENERATED@
+// «Опциональные» компоненты — те, чьё отсутствие в кластере не ошибка
+// (старые/новые установки, где этих сервисов просто нет). Если ListNode
+// по их пути упал — не падаем, возвращаем пустой список вместо ошибки.
 bool IsComponentOptional(EClusterComponentType component)
 {
     switch (component) {
@@ -41,6 +45,11 @@ bool IsComponentOptional(EClusterComponentType component)
     }
 }
 
+// @gearonixx @AI_GENERATED@
+// COMPAT(koloshmet) — пометка YT-стиля «костыль на время миграции
+// Эти компоненты в старых сборках кластера не публиковали версию через orchid
+// напрямую, поэтому если запрос orchid'а упал — пробуем достать версию через
+// fallback-путь /orchid/build_info/binary_version (см. GetCompatBinaryVersion).
 // COMPAT(koloshmet)
 bool IsComponentCompat(EClusterComponentType component)
 {
@@ -59,6 +68,14 @@ bool IsComponentCompat(EClusterComponentType component)
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx @AI_GENERATED@
+// Сериализатор одного TClusterComponentInstance в YSON. YT использует ADL-функцию
+// Serialize(value, consumer) для всех типов, которые могут уехать в YSON-вывод —
+// тут она вызовется когда хендлер /internal/discover_versions будет рендерить
+// ответ клиенту. BuildYsonFluently — fluent-API: пишет map с полями address/type,
+// дальше ветка через .DoIf — если ошибка пустая, кладём version/start_time/banned
+// (+ state если он есть), иначе кладём только error. То есть instance публикуется
+// либо «здоровым», либо «битым», без mix-а.
 void Serialize(const TClusterComponentInstance& instance, IYsonConsumer* consumer)
 {
     BuildYsonFluently(consumer)
@@ -83,6 +100,25 @@ void Serialize(const TClusterComponentInstance& instance, IYsonConsumer* consume
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx @AI_GENERATED@
+// TComponentDiscoverer — собирает срез по живым компонентам кластера (мастеры,
+// ноды, прокси, шедулеры, query tracker и т.д.) с их версиями/состоянием.
+// Используется хендлером /internal/discover_versions: наружу отдаётся «вот что
+// у нас крутится и каких версий» — для мониторинга, апгрейдов, проверки что во
+// всём кластере одна и та же версия.
+//
+// Конструктор просто запоминает зависимости:
+//   Client_                    — нативный YT-клиент, через который ходим в Cypress
+//                                и в orchid компонентов.
+//   MasterReadOptions_         — настройки чтения мастера (из какого реплики
+//                                читать, таймауты), навешиваются на каждый запрос.
+//   ComponentDiscoveryOptions_ — настройки самого discoverer'а; сейчас там
+//                                один колбэк ProxyDeathAgeCallback, возвращающий
+//                                «сколько секунд без liveness-апдейта считаем
+//                                прокси мёртвой» — приходит из координатора,
+//                                поэтому колбэк а не значение (оно может меняться).
+// YT_VERIFY — макрос-assert, падает в любой сборке (release тоже), если колбэк
+// не задан; здесь это контракт «без него нельзя».
 TComponentDiscoverer::TComponentDiscoverer(
     IClientPtr client,
     TMasterReadOptions masterReadOptions,
@@ -94,6 +130,21 @@ TComponentDiscoverer::TComponentDiscoverer(
     YT_VERIFY(ComponentDiscoveryOptions_.ProxyDeathAgeCallback);
 }
 
+// @gearonixx @AI_GENERATED@
+// Тянет список «нод хранения» (cluster/data/tablet/exec) — это машины-исполнители
+// данных и джоб, не путать с «нодой Cypress» (узел дерева). Их атрибуты лежат
+// прямо в Cypress на самих узлах: ListNode по //sys/<тип>s даёт сразу список
+// плюс все интересующие атрибуты в одном запросе (options.Attributes).
+//
+// WaitFor — YT-шный sync-wait: запрос асинхронный (TFuture), но мы блокируемся
+// на текущем файбере до ответа. ConvertToNode превращает YSON в дерево IListNode/
+// IMapNode для удобного обхода. Атрибуты читаются как Find<T> (опциональный)
+// или Get<T>(default). Для exec-нод также вытаскиваем job_proxy_build_version —
+// он понадобится в ListJobProxies, чтобы отдельной типизированной строкой
+// показать «джоб-прокси, едущие на этих нодах».
+//
+// Если нода online но потеряла version/start_time — вместо успеха пишем Error;
+// сериализатор тогда отдаст её как «битую» (см. Serialize выше).
 std::vector<TClusterComponentInstance> TComponentDiscoverer::ListClusterNodes(EClusterComponentType component) const
 {
     switch (component) {
@@ -152,6 +203,20 @@ std::vector<TClusterComponentInstance> TComponentDiscoverer::ListClusterNodes(EC
     return instances;
 }
 
+// @gearonixx @AI_GENERATED@
+// Аналог ListClusterNodes, но для HTTP/RPC-прокси. Принципиальная разница —
+// определение «жива ли»:
+//   RpcProxy  — у каждой прокси под её Cypress-узлом висит дочерний узел "alive"
+//               (lock-нода, исчезающая при потере сессии с мастером). Просто
+//               проверяем «есть alive — жив».
+//   HttpProxy — пишет в свой атрибут "liveness" структуру TLiveness с UpdatedAt
+//               (см. coordinator.h, тот самый Liveness что отдаёт TCoordinator
+//               в свою запись). Считаем живой, если последнее обновление было
+//               не позже sчем ProxyDeathAgeCallback() назад.
+//
+// Тут используется GetNode (а не ListNode), потому что нам нужен не плоский
+// список имён, а map «адрес → узел с атрибутами и потомками» — это позволяет
+// для RPC заглянуть в дочерний "alive" и одновременно прочитать атрибуты.
 std::vector<TClusterComponentInstance> TComponentDiscoverer::ListProxies(EClusterComponentType component) const
 {
     TGetNodeOptions options;
@@ -225,6 +290,20 @@ std::vector<TClusterComponentInstance> TComponentDiscoverer::ListProxies(ECluste
     return instances;
 }
 
+// @gearonixx @AI_GENERATED@
+// Возвращает относительные пути инстансов от GetCypressDirectory(component) —
+// то есть для PrimaryMaster это будут "/<address1>", "/<address2>" и т.д.
+// (полный путь склеит GetCypressPaths ниже).
+//
+// Спецкейс — SecondaryMaster: вторичных мастер-серверов в YT несколько *ячеек*
+// (cells), каждая со своими репликами, поэтому //sys/secondary_masters
+// двухуровневая: //sys/secondary_masters/<cell_tag>/<address>. Здесь
+// делаем GetNode (не Listдвa уровня сразу) и в двух вложенных циклах собираем
+// все пути вида "/<cell_tag>/<address>".
+//
+// Для остальных — обычный ListNode. Если ListNode фейлится и компонент опционален,
+// возвращаем пустой список вместо проброса ошибки (старые/новые кластера, где
+// этого сервиса просто нет).
 std::vector<TYPath> TComponentDiscoverer::GetCypressSubpaths(
     const NApi::IClientPtr& client,
     const NApi::TMasterReadOptions& masterReadOptions,
@@ -272,6 +351,13 @@ std::vector<TYPath> TComponentDiscoverer::GetCypressPaths(
     return paths;
 }
 
+// @gearonixx @AI_GENERATED@
+// Fallback-путь для COMPAT-компонентов: если стандартный orchid-запрос упал,
+// пробуем достать только версию из <path>/orchid/build_info/binary_version
+// (orchid — это виртуальное YSON-дерево, которое компонент сам выставляет;
+// build_info там более стабильный, чем кастомные поля). Возвращает TErrorOr —
+// либо строку с версией, либо TError. static_cast<TError&> — приводит TErrorOr
+// к его базовой части TError, чтобы вернуть только ошибку без оставшегося value.
 TErrorOr<std::string> TComponentDiscoverer::GetCompatBinaryVersion(const TYPath& path) const
 {
     auto rspOrError = WaitFor(Client_->GetNode(path + "/orchid/build_info/binary_version"));
@@ -286,6 +372,23 @@ TErrorOr<std::string> TComponentDiscoverer::GetCompatBinaryVersion(const TYPath&
     }
 }
 
+// @gearonixx @AI_GENERATED@
+// Универсальный «параллельный обход orchid'ов»: для компонентов, у которых
+// version/start_time лежат не атрибутами Cypress-узла, а внутри их собственного
+// orchid-поддерева (мастеры, шедулер, query-tracker и т.д.).
+//
+// Идея: на каждый subpath стартуем GetNode (асинхронно, без WaitFor) — копим
+// std::vector<TFuture<...>>, потом во втором цикле WaitFor'им каждый по очереди.
+// Так все запросы летят одновременно, а ждём суммарно ~max времени, а не сумму.
+// Таймаут 1 сек — чтобы один зависший компонент не заблокировал весь discover.
+//
+// suffix — позволяет добавить общий «хвост» к пути (например, "/orchid/service").
+// instanceType — иногда отличается от component (например, для job-proxy
+// сначала ходим как ExecNode, а в результате тип ставим JobProxy).
+//
+// Ответы парсим: если в orchid есть error — кладём её, иначе вытаскиваем
+// version/start_time. Для COMPAT-компонентов при фейле основного запроса
+// идём в fallback через GetCompatBinaryVersion.
 std::vector<TClusterComponentInstance> TComponentDiscoverer::GetAttributes(
     EClusterComponentType component,
     const std::vector<TYPath>& subpaths,
@@ -347,6 +450,14 @@ std::vector<TClusterComponentInstance> TComponentDiscoverer::GetAttributes(
     return results;
 }
 
+// @gearonixx @AI_GENERATED@
+// JobProxy — это отдельный процесс-обёртка, в котором запускается пользовательский
+// код map/reduce-джобы. Они не регистрируются в Cypress сами; вместо этого
+// каждый exec-нод в своём атрибуте "job_proxy_build_version" сообщает версию
+// бинаря джоб-прокси, которого она будет запускать. Поэтому здесь мы берём
+// список exec-нод (ListClusterNodes) и переписываем им Type=JobProxy + Version
+// из job_proxy_build_version. Забаненные exec-ноды пропускаем — на них джобы
+// не пойдут, так что их job-proxy-версия неинтересна.
 std::vector<TClusterComponentInstance> TComponentDiscoverer::ListJobProxies() const
 {
     auto execNodeInstances = ListClusterNodes(EClusterComponentType::ExecNode);
@@ -374,6 +485,13 @@ std::vector<TClusterComponentInstance> TComponentDiscoverer::ListJobProxies() co
     return instances;
 }
 
+// @gearonixx @AI_GENERATED@
+// Таблица соответствий «тип компонента → его корневая директория в Cypress».
+// Format("//sys/%lvs", component) — печать YT-енума его «lowercase»-именем плюс
+// "s" в конце (PrimaryMaster → "primary_masters"); работает для случаев, где
+// имя директории — просто множественное число от типа. Для остальных хардкод
+// конкретного пути. RpcProxy/HttpProxy используют константы из заголовка —
+// их пути исторически без префикса //sys/.
 TYPath TComponentDiscoverer::GetCypressDirectory(EClusterComponentType component)
 {
     switch (component) {
@@ -413,6 +531,15 @@ TYPath TComponentDiscoverer::GetCypressDirectory(EClusterComponentType component
     }
 }
 
+// @gearonixx @AI_GENERATED@
+// Диспатчер: по типу компонента выбирает нужный способ собрать инстансы.
+// Три ветки:
+//   1) «orchid-based»  — мастеры/шедулер/query-tracker и т.п.: список путей
+//      берётся из Cypress (GetCypressSubpaths), детали — из orchid (GetAttributes).
+//   2) «cluster nodes» — ноды хранения: всё нужное лежит атрибутами Cypress-узла,
+//      ListClusterNodes одним запросом.
+//   3) «proxies»       — RPC/HTTP-прокси: ListProxies со своей логикой live/dead.
+//   + JobProxy строится производно от exec-нод, см. ListJobProxies.
 std::vector<TClusterComponentInstance> TComponentDiscoverer::GetInstances(EClusterComponentType component) const
 {
     switch (component) {
@@ -448,6 +575,22 @@ std::vector<TClusterComponentInstance> TComponentDiscoverer::GetInstances(EClust
     }
 }
 
+// @gearonixx @AI_GENERATED@
+// Точка входа для /internal/discover_versions. Параллельно запускает GetInstances
+// для каждого значения енума и собирает результаты в один вектор.
+//
+// BIND(...).AsyncVia(invoker).Run() — YT-шный паттерн: BIND склеивает указатель
+// на метод и аргументы в callback, AsyncVia говорит «выполни это на указанном
+// invoker'е» (тут — текущий, то есть на каком-нибудь воркер-потоке), Run()
+// триггерит и сразу возвращает TFuture<...>, не дожидаясь. Unretained(this) —
+// «не держать сильную ссылку на меня в callback'е»; используется когда автор
+// уверен что объект переживёт асинхронную операцию (тут переживёт, потому что
+// сразу WaitFor'им AllSucceeded ниже, на том же стеке).
+//
+// AllSucceeded — комбинатор фьючей, ждёт пока все завершатся, и фейлит весь
+// набор если хоть одна упала. Zip(domain_values, responses) — параллельно
+// итерируется по двум диапазонам, чтобы для каждого компонента взять его
+// результат; ranges::move — перемещает элементы (не копирует) в общий вектор.
 std::vector<TClusterComponentInstance> TComponentDiscoverer::GetAllInstances() const
 {
     std::vector<TFuture<std::vector<TClusterComponentInstance>>> asyncInstances;

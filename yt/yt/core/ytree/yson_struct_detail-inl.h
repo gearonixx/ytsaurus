@@ -1079,10 +1079,14 @@ template <class TValue>
 TYsonStructParameter<TValue>& TYsonStructParameter<TValue>::Default(TValue defaultValue)
 {
     static_assert(!std::is_convertible_v<TValue, TIntrusivePtr<TYsonStruct>>, "Use DefaultCtor to register TYsonStruct default.");
+
+
     DefaultCtor_ = [value = std::move(defaultValue)] () { return value; };
     // Помечает поле как необязательное в YSON-файле. Раз дефолт есть — поле можно не указывать,
     // парсер просто использует дефолт вместо того, чтобы ругаться «обязательное поле отсутствует».
     Optional_ = true;
+
+
     return *this;
 }
 

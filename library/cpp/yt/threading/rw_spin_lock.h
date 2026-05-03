@@ -36,8 +36,25 @@ namespace NYT::NThreading {
  *  See tla+/spinlock.tla for the formally verified lock's properties.
  */
 
+
+/*
+ *
+ * @gearonixx @@spin_lock
+ *
+ * Через системный вызов в ядро — например futex на Linux.
+ *  Поток говорит ядру «усыпи меня, пока не произойдёт событие X», ядро убирает его из очереди на выполнение, освобождает CPU для других потоков.
+ *  Когда лок освобождается, владелец делает второй системный вызов «разбуди ждущих», и ядро возвращает поток в очередь.
+ *
+ *  Стоит это около микросекунды на усыпление + микросекунду на пробуждение из-за переключения контекста
+ *
+ *  Поэтому если лок держится наносекунды — спин дешевле; если миллисекунды — сон выгоднее, потому что CPU успеет сделать полезную работу
+ *
+ *  Обычные мьютексы (std::mutex, pthread_mutex_t) обычно гибридные — сначала немного спинят, потом засыпают.
+*/
+
 namespace NDetail {
 
+    // unchecked - без проверок
 class TUncheckedReaderWriterSpinLock
     : public TSpinLockBase
 {
@@ -170,6 +187,11 @@ private:
 
 } // namespace NDetail
 
+
+// В debug-сборке (NDEBUG не определён) используется проверяемая версия лока — она ловит
+// баги вроде «писатель пытается рекурсивно взять свой же лок», «лок отпущен не тем потоком, который его взял», ведёт учёт владельцев.
+// В release (NDEBUG определён) — голая быстрая версия без проверок.
+
 #ifndef NDEBUG
 using TReaderWriterSpinLock = NDetail::TCheckedReaderWriterSpinLock;
 #else
@@ -179,6 +201,7 @@ using TReaderWriterSpinLock = NDetail::TUncheckedReaderWriterSpinLock;
 ////////////////////////////////////////////////////////////////////////////////
 
 //! A variant of TReaderWriterSpinLock occupying the whole cache line.
+    // @gearonixx
 class alignas(CacheLineSize) TPaddedReaderWriterSpinLock
     : public TReaderWriterSpinLock
 { };

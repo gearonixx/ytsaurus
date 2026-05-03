@@ -222,6 +222,8 @@ class TPingHandler
     : public NHttp::IHttpHandler
 {
 public:
+    // ● Потому что инфа «забанен я / в read-only / liveness просрочен» живёт именно в координаторе — он один следит за Cypress и за своим состоянием
+    // @gearonixx @@DI
     explicit TPingHandler(TCoordinatorPtr coordinator);
 
     void HandleRequest(
@@ -229,6 +231,7 @@ public:
         const NHttp::IResponseWriterPtr& rsp) override;
 
 private:
+    // dependeccyn
     const TCoordinatorPtr Coordinator_;
 };
 

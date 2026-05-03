@@ -35,6 +35,11 @@ using namespace NAuth;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+
+// ● Сервер тоже как-то надо запустить и сказать ему откуда брать конфиг — ytserver-http-proxy --config /etc/yt/http-proxy.yson.
+// Плюс служебное: --version чтобы deploy-скрипт сверил версию, --pdeathsig чтобы
+// дочерний процесс умер вместе с родителем (для оркестратора), флаги логов. Это не интерактивный CLI, а запускающие аргументы.
+
 void TProfilingEndpointProviderConfig::Register(TRegistrar registrar)
 {
     registrar.Parameter("component_type", &TThis::ComponentType);

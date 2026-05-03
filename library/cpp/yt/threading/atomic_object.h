@@ -32,18 +32,23 @@ public:
     bool CompareExchange(T& expected, const T& desired);
 
     //! Atomically transforms the value with function #func.
+    //  это concept (C++20), который проверяет, что F можно вызвать с аргументом типа T&
     template <std::invocable<T&> F>
     std::invoke_result_t<F, T&> Transform(const F& func);
 
+    // @gearonixx @@UPSTREAM
+    // typo
+
     //! Atomicaly reads the value with function #func.
     template <std::invocable<const T&> F>
+    // это как ReturnType чтоли?
     std::invoke_result_t<F, const T&> Read(const F& func) const;
 
     T Load() const;
 
 private:
     T Object_;
-    YT_DECLARE_SPIN_LOCK(NThreading::TReaderWriterSpinLock, Spinlock_);
+    YT_DECLARE_SPIN_LOCK(NThreadingwTReaderWriterSpinLock, Spinlock_);
 };
 
 ////////////////////////////////////////////////////////////////////////////////

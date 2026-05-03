@@ -275,6 +275,8 @@ struct TAccessCheckerConfig
     //! PathPrefix/ProxyRole/principal if UseAccessControlObjects is set.
     TString PathPrefix;
 
+    // @gearonixx @@task
+
     // COMPAT(verytable): Drop it after migration to aco roles everywhere.
     bool UseAccessControlObjects;
 

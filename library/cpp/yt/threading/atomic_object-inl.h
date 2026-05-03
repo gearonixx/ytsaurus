@@ -26,6 +26,9 @@ template <class T>
 template <class U>
 T TAtomicObject<T>::Exchange(U&& u)
 {
+    // это именованная переменная, а именованная переменная всегда lvalue
+    // именованная сущность всегда имеет имя, по которому её можно взять адресом и
+    // использовать повторно, а это и есть определение lvalue, независимо от того, какой у неё тип.
     T tmpObject = std::forward<U>(u);
     {
         auto guard = WriterGuard(Spinlock_);

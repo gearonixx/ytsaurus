@@ -99,6 +99,13 @@ private:
 
 #endif
 
+    // @gearonixx
+    // ❯ lolol look at this
+//     //! This is a mere declaration and intentionally does not check anything.
+// #define YT_ASSERT_THREAD_AFFINITY_ANY() do { } while (false)
+//
+//     ● Да, это no-op. Смысл — документация в коде: автор явно говорит «я подумал про потоки, метод можно звать откуда угодно», в отличие от YT_ASSERT_THREAD_AFFINITY(Thread), который реально проверяет. Если такой
+//        пометки нет, ревьюер не поймёт, забыли подумать или нет.
 //! This is a mere declaration and intentionally does not check anything.
 #define YT_ASSERT_THREAD_AFFINITY_ANY() do { } while (false)
 
