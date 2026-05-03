@@ -728,6 +728,9 @@ struct TFutureCombinerOptions
 {
     //! If true, canceling the future returned from the combiner
     //! automatically cancels the original input futures.
+    // @gearonixx @@UPSTREAM
+
+    // typo
     bool PropagateCancelationToInput = true;
 
     //! If true, the combiner cancels all irrelevant input futures

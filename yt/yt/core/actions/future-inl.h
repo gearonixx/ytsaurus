@@ -2538,6 +2538,7 @@ TFuture<T> AnySet(
         ->Run();
 }
 
+//  по сути это Promise.all из JS.
 template <class T>
 TFuture<typename TFutureCombinerTraits<T>::TCombinedVector> AllSucceeded(
     std::vector<TFuture<T>> futures,

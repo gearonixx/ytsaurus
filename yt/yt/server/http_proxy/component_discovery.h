@@ -40,6 +40,11 @@ DEFINE_ENUM(EClusterComponentType,
 );
 
 ////////////////////////////////////////////////////////////////////////////////
+/// @gearonixx
+    ///● По привычке/code-style. Класс комментариев //!//*! распознаётся тулзами вроде Doxygen, IDE (CLion/Qt Creator показывает их в hover'е), статанализаторами. В YTsaurus это унаследованная конвенция: пишется как
+    // «doc-style», даже если генератор docs за ним не ходит — вдруг кто-то локально прогонит, и заодно IDE подсветит.
+    //
+// не понятно это нужно билдить самому или через Doxygen вообще
 
 //! This struct represents common attributes of instances of all YT components.
 //! It is used in multiple endpoints exposed by the http proxy.

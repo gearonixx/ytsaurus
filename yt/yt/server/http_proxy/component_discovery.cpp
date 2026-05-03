@@ -606,9 +606,26 @@ std::vector<TClusterComponentInstance> TComponentDiscoverer::GetAllInstances() c
 
     std::vector<TClusterComponentInstance> instances;
 
+    // Да, ровно как std::iter::zip в Rust или zip в Python: параллельно итерируется по нескольким диапазонам и на каждом шаге выдаёт
+    // кортеж элементов с одинаковым индексом. Тут — (component_i, responses_i), чтобы
+    // для каждого типа компонента взять соответствующий результат фьючи. Длина — по самому короткому контейнеру (это написано в //!-комменте над Zip).
+
+
+    // for каждого component_type из enum EClusterComponentType:
+    //     instances_этого_типа = responses[index_of(component_type)]
+    //     instances.append_all(instances_этого_типа)
+
+//     for (const [component, componentInstances] of zip(
+//     getDomainValues(EClusterComponentType),
+//     responses,
+// )) {
+//         instances.push(...componentInstances);
+// }
+
     for (auto&& [component, componentInstances] :
         Zip(TEnumTraits<EClusterComponentType>::GetDomainValues(), responses))
     {
+        // а for (auto& x : componentInstances) instances.push_back(std::move(x));
         std::ranges::move(componentInstances, std::back_inserter(instances));
     }
 
