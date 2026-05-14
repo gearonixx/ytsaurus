@@ -45,6 +45,11 @@ DEFINE_ENUM(EPeerKind,
     ((LeaderOrFollower)  (2))
 );
 
+// @gearonixx
+//  // какая версия этого объекта
+
+// using TRevision = ui64;  // это просто псевдоним, TRevision и ui64 взаимозаменяемы
+// YT_DEFINE_STRONG_TYPEDEF(TRevision, ui64);  // это отдельный тип, нельзя перепутать
 YT_DEFINE_STRONG_TYPEDEF(TRevision, ui64);
 constexpr auto NullRevision = TRevision();
 

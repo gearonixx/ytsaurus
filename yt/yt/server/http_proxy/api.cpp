@@ -468,7 +468,10 @@ void TApi::HandleRequest(
     const IResponseWriterPtr& rsp)
 {
     auto context = New<TContext>(MakeStrong(this), req, rsp);
+
     try {
+        // ntrol: no-store в ответ — указывает клиенту и промежуточным прокси вообще не кэшировать тело ответа (ни в памяти, ни на диске). Используется для чувствительных данных (токены,
+        // ответы API), чтобы при повторном запросе всегда шли свежие данные с сервера.
         if (!context->TryPrepare()) {
             PrepareErrorCount_.Increment();
             auto statusCode = rsp->GetStatus();

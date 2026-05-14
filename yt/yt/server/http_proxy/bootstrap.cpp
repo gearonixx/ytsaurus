@@ -833,6 +833,15 @@ IHttpHandlerPtr TBootstrap::AllowCors(IHttpHandlerPtr nextHandler) const
 void TBootstrap::RegisterRoutes(const NHttp::IServerPtr& server)
 {
     server->AddHandler("/auth/whoami", AllowCors(HttpAuthenticator_));
+    // @gearonixx @AI_GENERATED@
+    // AddHandler внутри использует TRequestPathMatcher (core/http/server.cpp).
+    // Паттерны с / на конце пишутся в Subtrees_ (две версии — "/api/" и "/api").
+    // Match делает longest-prefix по сегментам (находит самый длинный из
+    // зарегистрированных префиксов, покрывающий путь): для /api/v3/read_table
+    // сначала смотрит Exact_, потом режет path с конца по слэшам, пока не
+    // найдёт совпадение в Subtrees_, и вернёт сюда AllowCors(Api_).
+    // AllowCors — обёртка: на OPTIONS сама отдаёт CORS-заголовки, иначе зовёт
+    // Api_->HandleRequest, откуда уходит в TContext::TryPrepare/Run/Finalize.
     server->AddHandler("/api/", AllowCors(Api_));
     server->AddHandler("/hosts/", AllowCors(HostsHandler_));
     server->AddHandler("/cluster_connection/", AllowCors(ClusterConnectionHandler_));

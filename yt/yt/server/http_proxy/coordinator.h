@@ -68,7 +68,7 @@ struct TProxyEntry
     : public NYTree::TYsonStruct
 {
 
-  //   Endpoint — адрес прокси (host:port), по которому к ней ходят клиенты. Role — логическая группа (data, control, default...), клиент в /hosts?role=data получит только прокси с этой ролью. Liveness — снимок
+  // Endpoint — адрес прокси (host:port), по которому к ней ходят клиенты. Role — логическая группа (data, control, default...), клиент в /hosts?role=data получит только прокси с этой ролью. Liveness — снимок
   // текущей нагрузки (CPU, load average, число активных запросов), по нему координатор балансирует и решает, кто «жив».
     std::string Endpoint;
     // етка-группа прокси: админ ставит роль в //sys/proxies/<host>/@role, и клиент запросом /hosts?role=data получает только прокси с этой ролью. Так разделяют трафик — например, тяжёлые батчи на одни прокси,
@@ -95,6 +95,8 @@ struct TCoordinatorProxy
     : public TRefCounted
 {
     const TProxyEntryPtr Entry;
+    // Dampening (демпфирование) — это счётчик-штраф для конкретной прокси при балансировке.
+    // Когда координатор отдаёт клиенту список прокси, он сортирует/взвешивает их в том числе по этому полю: чем больше Dampening, тем реже эту прокси будут выбирать.
     std::atomic<i64> Dampening = 0;
 
     explicit TCoordinatorProxy(const TProxyEntryPtr& proxyEntry);
@@ -104,7 +106,7 @@ DEFINE_REFCOUNTED_TYPE(TCoordinatorProxy)
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// отому что на координатор держат TIntrusivePtr сразу несколько владельцев (TBootstrap, хендлеры /hosts и /ping, TAccessChecker, фоновые периодики),
+/// Потому что на координатор держат TIntrusivePtr сразу несколько владельцев (TBootstrap, хендлеры /hosts и /ping, TAccessChecker, фоновые периодики),
 /// и время жизни не привязано к одному из них — объект должен
 // жить, пока есть хоть одна ссылка. TRefCounted даёт встроенный счётчик ссылок, на котором работает TIntrusivePtr (дешевле shared_ptr, счётчик в самом
 class TCoordinator

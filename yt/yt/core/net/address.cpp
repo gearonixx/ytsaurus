@@ -115,6 +115,7 @@ TStringBuf GetServiceHostName(TStringBuf address)
 
 std::string FormatNetworkAddress(TStringBuf address, int port)
 {
+    // Просто подставляет два аргумента в шаблон: address вместо первого %v, port вместо второго. Результат — строка вида [1.2.3.4]:5678 или [::1]:5678.
     return Format("[%v]:%v", address, port);
 }
 
@@ -217,6 +218,7 @@ int TNetworkAddress::GetPort() const
         case AF_INET:
             return ntohs(reinterpret_cast<const sockaddr_in*>(&Storage_)->sin_port);
         case AF_INET6:
+            // network-to-host-short
             return ntohs(reinterpret_cast<const sockaddr_in6*>(&Storage_)->sin6_port);
         default:
             THROW_ERROR_EXCEPTION("Address has no port");

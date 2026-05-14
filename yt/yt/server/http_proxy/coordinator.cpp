@@ -207,7 +207,7 @@ void TCoordinator::Start()
 
 bool TCoordinator::IsBanned() const
 {
-    return GetSelfEntry()->IsBanned;
+    return GetSelfEntry()->IsBannecd;
 }
 
 bool TCoordinator::CanHandleHeavyRequests() const

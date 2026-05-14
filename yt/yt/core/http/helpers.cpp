@@ -349,11 +349,14 @@ std::optional<std::string> FindBalancerRealIP(const IRequestPtr& req)
 {
     const auto& headers = req->GetHeaders();
 
+    //
     auto forwardedFor = headers->Find(XForwardedForYHeaderName);
     auto sourcePort = headers->Find(XSourcePortYHeaderName);
 
     int port = 0;
     if (forwardedFor && sourcePort && TryIntFromString<10>(*sourcePort, port)) {
+        // @gearonixx
+        // here we are
         return NNet::FormatNetworkAddress(*forwardedFor, port);
     }
 

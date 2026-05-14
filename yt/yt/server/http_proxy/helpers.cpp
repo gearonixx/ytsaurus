@@ -211,6 +211,7 @@ void FixupNodesWithAttributes(const IMapNodePtr& node)
 
 NYTree::IMapNodePtr HideSecretParameters(const TString& commandName, NYTree::IMapNodePtr parameters)
 {
+    // poll_job_shell — интерактивная оболочка внутри джоба. /environment это переменные окружения, а туда часто прокидывают секреты (AWS_SECRET_KEY, YT_TOKEN и т.д.).
     std::vector<TString> secretParameters = {
         "/spec/secure_vault",
         "/query",

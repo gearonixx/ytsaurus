@@ -54,7 +54,7 @@ YT_DEFINE_ERROR_ENUM(
  *  Part 2: the lower  part of 64-bit sequential counter
  *  Part 3: the higher part of 64-bit sequential counter
  */
-using TObjectId = TGuid;
+using ObjectId = TGuid;
 
 //! The all-zero id used to denote a non-existing object.
 constexpr TObjectId NullObjectId = {};

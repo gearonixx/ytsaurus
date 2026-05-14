@@ -84,6 +84,9 @@ TContext::TContext(
     DriverRequest_.Id = Request_->GetRequestId();
 }
 
+  // TContext — состояние одного HTTP-запроса к API прокси: парсит URL/команду/юзера, выбирает форматы ввода-вывода, проверяет права, гоняет команду через Driver и пишет ответ. По сути это «обработчик одного
+  // запроса», создаётся в TApi на каждый входящий запрос и живёт до его завершения.
+
 bool TContext::TryPrepare()
 {
     ProcessDebugHeaders(Request_, Response_, Api_->GetCoordinator());
@@ -94,6 +97,8 @@ bool TContext::TryPrepare()
 
     Response_->GetHeaders()->Set("Cache-Control", "no-store");
 
+    // Координатор хранит список живых хостов — функция спрашивает у него куда редиректить.
+    // Координатор знает актуальный список живых data proxy хостов. Функция берёт у него хост и отдаёт клиенту `302 Location`.
     return
         TryParseRequest() &&
         TryParseCommandName() &&
@@ -124,6 +129,8 @@ bool TContext::TryParseRequest()
         OmitTrailers_ = true;
     }
 
+    //   IsFramingEnabled_ — если клиент шлёт X-YT-Accept-Framing и фичa включена в конфиге, прокси начнёт отвечать «фреймами». Framing — это обёртка над телом ответа, которая позволяет на длинных запросах слать
+    // keep-alive пинги внутри потока, чтобы балансер не убил коннекшн по таймауту.
     if (Request_->GetHeaders()->Find("X-YT-Accept-Framing") && GetFramingConfig()->Enable) {
         Response_->GetHeaders()->Set("X-YT-Framing", "1");
         IsFramingEnabled_ = true;
@@ -160,6 +167,13 @@ bool TContext::TryParseCommandName()
     TStringBuf commandName = versionedName;
     commandName.Skip(7);
     if (commandName == "" || commandName == "/") {
+        //
+        // ● v3 — старая, «сырая»: параметры команды плоские, ответ как есть (например, get возвращает прямо значение узла).
+        // v4 — новая, всё в едином формате: параметры — структурированный объект, ответ всегда обёрнут в
+        //    YSON-словарь с именованными полями (типа {value: ...}), что удобно для типизированных клиентов и расширяемо без ломки совместимости.
+        //
+        //   В http_proxy они живут параллельно: разные Driver'ы (GetDriverV3() / GetDriverV4()), разный набор/семантика команд, выбор по префиксу URL.
+
         if (*ApiVersion_ == 3) {
             Response_->SetStatus(EStatusCode::OK);
             DispatchJson([this] (auto consumer) {
@@ -194,6 +208,17 @@ bool TContext::TryParseCommandName()
     return true;
 }
 
+
+// TryPrepare — всё что может провалиться и вернуть ошибку клиенту.
+// FinishPrepare — всё что делается после того как запрос одобрен.
+
+ //    TContext — состояние одного HTTP-запроса. На каждый входящий
+ // запрос TApi создаёт TContext и гоняет его через стадии:
+ // TryPrepare (парсинг URL, аутентификация, форматы, права) →
+ // FinishPrepare (стримы, заголовки, трейсинг) → Run (вызов
+ // Driver->Execute) → LogAndProfile → Finalize. Грубо — «жизненный
+ // цикл одного запроса в одном объекте».
+
 bool TContext::TryParseUser()
 {
     // NB: This function is the only thing protecting cluster from
@@ -203,12 +228,25 @@ bool TContext::TryParseUser()
     if (!authResult.IsOK()) {
         YT_LOG_DEBUG(authResult, "Authentication error");
 
+        // discover_proxies — это команда, которой клиент спрашивает у прокси список всех живых HTTP-прокси
+        // кластера (для клиентского балансинга: SDK сам ходит в одну прокси за списком, потом раскидывает запросы
+        // по остальным).
+        //
+        // Это служебный discovery, никаких данных кластера он не отдаёт, поэтому требовать аутентификацию для него бессмысленно
+        // клиент ещё может не иметь токена.
+
+
+        // Подмена на root тут — технический хак: дальше по коду
+        // драйвер всё равно требует какого-то юзера для исполнения команды, поэтому ставят системного root, чтобы пройти проверки.
         if (DriverRequest_.CommandName == "discover_proxies") {
             DriverRequest_.AuthenticatedUser = NSecurityClient::RootUserName;
             return true;
         }
 
+        // // 1. HTTP-статус: 401 если протух токен, 403 если нет прав, и т.д.
         SetStatusFromAuthError(Response_, TError(authResult));
+        // // 2. YT-специфичные заголовки: X-YT-Error, X-YT-Error-Code — для SDK,
+        //    который парсит ошибку из заголовков, не читая тело
         FillYTErrorHeaders(Response_, TError(authResult));
         DispatchJson([&] (auto consumer) {
             BuildYsonFluently(consumer)
@@ -226,11 +264,16 @@ bool TContext::TryParseUser()
 
     if (DriverRequest_.CommandName == "ping_tx" || DriverRequest_.CommandName == "parse_ypath") {
         DriverRequest_.AuthenticatedUser = authenticatedUser;
+        // от клиента, а через L7-балансировщик (nginx/Envoy перед прокси YT).
+        // Сокет видит IP балансировщика, а реальный IP клиента балансер кладёт в заголовок (X-Forwarded-For или X-Real-IP)
+        //  Or RemoteAddress. То есть «верни Real-IP от балансера, иначе RemoteAddress сокета».
         DriverRequest_.UserRemoteAddress = GetBalancerRealIPOrRemoteAddress();
         return true;
     }
 
     try {
+        // Проверяет, что аутентифицированный пользователь имеет право вообще пользоваться этой прокси — типично смотрит,
+        // не забанен ли юзер, не превышены ли его квоты на
         Api_->ValidateUser(authenticatedUser);
     } catch (const std::exception& ex) {
         Response_->SetStatus(EStatusCode::Forbidden);
@@ -247,6 +290,7 @@ bool TContext::TryParseUser()
     }
 
     DriverRequest_.AuthenticatedUser = authenticatedUser;
+    // likely a helper function that determines the actual client IP address.
     DriverRequest_.UserRemoteAddress = GetBalancerRealIPOrRemoteAddress();
     return true;
 }
@@ -277,6 +321,9 @@ bool TContext::TryGetDescriptor()
 
 bool TContext::TryCheckAvailability()
 {
+    // IsBanned() смотрит флаг в Кипарисе для текущей прокси — админ может забанить конкретный инстанс (вывести из ротации для дебага, выкатки, и т.
+    // д.), и тогда прокси сама начинает отвечать 503 ServiceUnavailable на все запросы.
+    // Балансер по этому статусу (или по health-check) перестанет на неё слать трафик.
     if (Api_->GetCoordinator()->IsBanned()) {
         DispatchUnavailable(TError{NApi::NRpcProxy::EErrorCode::ProxyBanned, "This proxy is banned"});
         return false;
@@ -580,6 +627,9 @@ void TContext::SetContentDispositionAndMimeType()
         ContentType_ = FormatToMime(*OutputFormat_);
     }
 }
+
+
+//  логирует входящий запрос с замазанными секретами перед выполнением. Команда, юзер, параметры, форматы ввода/вывода.
 
 void TContext::LogRequest()
 {
@@ -1083,6 +1133,12 @@ void TContext::Finalize()
         }
     }
 
+    // Прокси. Балансер обычно один логический (за ним несколько инстансов для отказоустойчивости, но клиент видит один адрес),
+    // а HTTP-прокси YT — десятки-сотни инстансов в кластере, между которыми балансер и раскидывает нагрузку.
+
+    // Балансер — это прокси-сервер перед бэкендами, который принимает все входящие запросы и распределяет их по живым инстансам HTTP-прокси YT.
+    // У YT их обычно десятки/сотни, клиент не должен знать про каждого — он ходит на один публичный адрес (balancer.yt.yandex.net условно), а балансер раскидывает.
+
     if (!Error_.IsOK() && dumpErrorIntoResponse && DriverRequest_.OutputStream) {
         Y_UNUSED(WaitFor(DriverRequest_.OutputStream->Write(DumpError(Error_))));
         Y_UNUSED(WaitFor(DriverRequest_.OutputStream->Close()));
@@ -1123,6 +1179,7 @@ void TContext::Finalize()
 
 std::optional<std::string> TContext::GetBalancerRealIPOrRemoteAddress() const
 {
+    // likely a helper function that determines the actual client IP address.
     if (auto pingerAddress = FindBalancerRealIP(Request_)) {
         return pingerAddress;
     }
@@ -1147,6 +1204,10 @@ void TContext::DispatchUnauthorized(const TString& scope, const TString& message
 void TContext::DispatchUnavailable(const TError& error)
 {
     Response_->SetStatus(EStatusCode::ServiceUnavailable);
+    // @gearonixx @@UPSTREAM
+
+   // typo
+
     // This header is header is probably useless, but we keep it for compatibility.
     Response_->GetHeaders()->Set("Retry-After", "60");
     ReplyError(error);

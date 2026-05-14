@@ -38,13 +38,20 @@ struct TServiceTicketCredentials
 struct TAuthenticationResult
 {
     //! Effective login. If impersonation was performed, this is the impersonated user.
+    // блять, это название пользователя вроде dev/x/root / thatwever
+    //  а имя аккаунта, как username в гитхабе.
     std::string Login;
+    // откуда взялся юзер:
     TString Realm;
+    // TVM user ticket, его прокси прокидывает дальше во внутренние сервисы
     TString UserTicket;
-    //! Set to the original user name if impersonation headers were provided.
+    // @gearonixx @@UPSTREAM
+    // typos
+    //! Set to the original user name if impersonation headers were providcsed.
     std::optional<std::string> RealLogin;
 
     //! If set, client is advised to set this cookie.
+    // если выставлен, прокси должна положить это в HTTP-ответ как Set-Cookie.
     std::optional<TString> SetCookie;
 };
 

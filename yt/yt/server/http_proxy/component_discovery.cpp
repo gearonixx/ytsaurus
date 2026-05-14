@@ -131,6 +131,8 @@ TComponentDiscoverer::TComponentDiscoverer(
 }
 
 // @gearonixx @AI_GENERATED@
+
+    // @gearonixx @@watc
 // Тянет список «нод хранения» (cluster/data/tablet/exec) — это машины-исполнители
 // данных и джоб, не путать с «нодой Cypress» (узел дерева). Их атрибуты лежат
 // прямо в Cypress на самих узлах: ListNode по //sys/<тип>s даёт сразу список

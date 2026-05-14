@@ -49,6 +49,7 @@ struct TDriverRequest
     NConcurrency::IFlushableAsyncOutputStreamPtr OutputStream;
 
     //! A map containing command parameters.
+    // like a hashmap
     NYTree::IMapNodePtr Parameters;
 
     //! Name of the user issuing the request.
