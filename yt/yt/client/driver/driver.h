@@ -72,6 +72,8 @@ struct TDriverRequest
     //! Additional logging tags.
     std::optional<std::string> LoggingTags;
 
+    // IYsonConsumer* ResponseParametersConsumer;        // драйвер пишет сюда метаданные
+    // std::function<void()> ResponseParametersFinishedCallback; // колбэк когда закончил
     //! Provides means to return arbitrary structured data from any command.
     //! Must be filled before writing data to output stream.
     NYson::IYsonConsumer* ResponseParametersConsumer;

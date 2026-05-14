@@ -982,10 +982,18 @@ void TContext::Run()
     Response_->SetStatus(EStatusCode::OK);
 
     auto driverRequest = DriverRequest_;
+
+    // @gearonixx @@LOGGING
+    // log the driver req here
+
     if (driverRequest.CommandName == "discover_proxies") {
         driverRequest.AuthenticatedUser = NSecurityClient::RootUserName;
     }
 
+    // Защита от OOM — если процесс съел слишком много памяти, новые запросы дропаются с Unavailable (клиент ретраит)
+    // вместо того чтобы процесс упал.
+    //
+    // Защита от OOM — если процесс съел слишком много памяти, новые запросы дропаются с Unavailable (клиент ретраит) вместо того чтобы процесс упал.
     if (Api_->GetMemoryUsageTracker()) {
         // We use Unavailable code here, as it is already retryable in all clients.
         auto error = TError(NRpc::EErrorCode::Unavailable,
@@ -1259,7 +1267,7 @@ TFramingConfigPtr TContext::GetFramingConfig() const
 {
     return Api_->GetDynamicConfig()->Framing;
 }
-
+// Настраивает сбор выходных параметров ответа — метаданных которые драйвер пишет в процессе выполнения команды.
 void TContext::ProcessDelayBeforeCommandTestingOption()
 {
     auto testingOptions = Api_->GetConfig()->TestingOptions;
