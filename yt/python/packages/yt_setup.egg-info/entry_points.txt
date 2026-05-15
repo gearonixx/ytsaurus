@@ -1,0 +1,3 @@
+[console_scripts]
+generate_python_proto = yt_setup.generate_python_proto:main
+prepare_python_modules = yt_setup.prepare_python_modules:main

@@ -222,6 +222,11 @@ TYsonStructParameter<TValue>& TYsonStructRegistrar<TStruct>::BaseClassParameter(
     return *parameter;
 }
 
+
+
+// Потому что он умеет достать поле любым способом, а не только «указателем на член класса». Обычный аксессор — это &TStruct::Field, и это работает только если Field лежит прямо в TStruct. А
+//  std::function<TValue&(TStruct*)> — это произвольная лямбда: она может вернуть поле из вложенного объекта, поле из base-класса, элемент массива по индексу, поле, вычисленное по другому полю и т.п. Отсюда и
+//  «universal» — не привязан к конкретной форме доступа.
 template <class TStruct>
 template <class TValue>
 TYsonStructParameter<TValue>& TYsonStructRegistrar<TStruct>::ParameterWithUniversalAccessor(const std::string& key, std::function<TValue&(TStruct*)> accessor)

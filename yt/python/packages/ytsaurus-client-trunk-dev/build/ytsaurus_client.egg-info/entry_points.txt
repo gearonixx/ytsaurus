@@ -1,0 +1,2 @@
+[console_scripts]
+yt = yt.cli.yt_binary:main

@@ -932,6 +932,40 @@ void TContext::Run()
     Response_->SetStatus(EStatusCode::OK);
 
     auto driverRequest = DriverRequest_;
+
+    // @gearonixx @AI_GENERATED@
+    // Полный дамп всех полей TDriverRequest перед передачей в драйвер.
+    // Секреты (UserToken, ServiceTicket) не печатаем — только факт наличия и длину.
+    // Parameters пропускаем через HideSecretParameters, как в LogRequest().
+    YT_LOG_DEBUG(
+        "Running driver request "
+        "(Id: %v, CommandName: %v, AuthenticatedUser: %v, UserTag: %v, "
+        "UserRemoteAddress: %v, UserTokenPresent: %v, UserTokenLength: %v, "
+        "ServiceTicketPresent: %v, ServiceTicketLength: %v, LoggingTags: %v, "
+        "Parameters: %v, InputStreamPresent: %v, OutputStreamPresent: %v, "
+        "ResponseParametersConsumerPresent: %v, ResponseParametersFinishedCallbackPresent: %v, "
+        "MemoryUsageTrackerPresent: %v)",
+        driverRequest.Id,
+        driverRequest.CommandName,
+        driverRequest.AuthenticatedUser,
+        driverRequest.UserTag,
+        driverRequest.UserRemoteAddress,
+        driverRequest.UserToken.has_value(),
+        driverRequest.UserToken ? driverRequest.UserToken->size() : 0,
+        driverRequest.ServiceTicket.has_value(),
+        driverRequest.ServiceTicket ? driverRequest.ServiceTicket->size() : 0,
+        driverRequest.LoggingTags,
+        Descriptor_
+            ? ConvertToYsonString(
+                HideSecretParameters(Descriptor_->CommandName, driverRequest.Parameters),
+                EYsonFormat::Text).ToString()
+            : TString("<no-descriptor>"),
+        static_cast<bool>(driverRequest.InputStream),
+        static_cast<bool>(driverRequest.OutputStream),
+        driverRequest.ResponseParametersConsumer != nullptr,
+        static_cast<bool>(driverRequest.ResponseParametersFinishedCallback),
+        static_cast<bool>(driverRequest.MemoryUsageTracker));
+
     if (driverRequest.CommandName == "discover_proxies") {
         driverRequest.AuthenticatedUser = NSecurityClient::RootUserName;
     }
@@ -977,7 +1011,7 @@ void TContext::Run()
     }
 
     if (*ApiVersion_ == 4) {
-        WaitFor(Api_->GetDriverV4()->Execute(driverRequest))
+        WaitFor(Api_->GetDriverV()->Execute(driverRequest))
             .ThrowOnError();
     } else {
         WaitFor(Api_->GetDriverV3()->Execute(driverRequest))

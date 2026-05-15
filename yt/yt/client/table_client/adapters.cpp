@@ -3,6 +3,7 @@
 #include "private.h"
 #include "schema.h"
 #include "row_batch.h"
+#include "unversioned_row.h"
 
 #include <yt/yt/client/api/table_writer.h>
 
@@ -215,6 +216,15 @@ void PipeReaderToWriter(
         .ThrowOnError();
 }
 
+
+    // 1. HTTP-прокси на запрос read-table зовёт client->CreateTableReader(path, options). Возвращается ITableReader — это и есть тот «reader», который потом оборачивается и попадает в PipeReaderToWriterByBatches.
+    // 2. Под капотом ITableReader идёт в мастер (Cypress) и спрашивает: «что такое //home/input_table?» — мастер отвечает схемой + списком чанков (chunk IDs) и репликами (на каких data-нодах эти чанки лежат).
+    // 3. Дальше reader открывает RPC-стрим к data-нодам и качает чанки кусками. Чанк на ноде — это файл на диске в её сторе; внутри он в колоночном/блочном формате YT, со сжатием.
+    // 4. Reader декодирует блоки чанка → распаковывает → разбирает в TUnversionedRow → складывает в батч → отдаёт его наружу через Read().
+    //
+    // То есть reader->Read не «лезет в таблицу» сам — он отдаёт уже подготовленный батч из своего внутреннего буфера, который фоном наполняется чанками, прилетающими по RPC с data-нод. GetReadyEvent() как раз и ждётся,
+    // когда буфер пуст, а следующий батч ещё едет по сети.
+
 void PipeReaderToWriterByBatches(
     const IRowBatchReaderPtr& reader,
     const ISchemalessFormatWriterPtr& writer,
@@ -225,14 +235,49 @@ void PipeReaderToWriterByBatches(
     try {
         auto yielder = CreatePeriodicYielder(TDuration::Seconds(1));
 
+        //  reader->Read выдаст батч (IUnversionedRowBatch), внутри которого две TUnversionedRow.
+  //       ow 0: [ {Id=0 (column "id"),   Type=Int64,  Data=0},
+  //          {Id=1 (column "text"), Type=String, Data="Hello"} ]
+  // Row 1: [ {Id=0, Type=Int64,  Data=1},
+  //          {Id=1, Type=String, Data="World!"} ]
+
+
+        // @@CLAUDE_LOG_HERE
+        int batchIndex = 0;
         for (bool isFirstBatch = true; auto batch = reader->Read(options); isFirstBatch = false) {
             yielder.TryYield();
 
+            YT_LOG_DEBUG("@gearonixx === reader->Read returned (BatchIndex: %v, RowCount: %v, IsEmpty: %v, MaxRowsPerRead: %v)",
+                batchIndex,
+                batch->GetRowCount(),
+                batch->IsEmpty(),
+                options.MaxRowsPerRead);
+
             if (batch->IsEmpty()) {
+                YT_LOG_DEBUG("@gearonixx batch is empty, waiting for GetReadyEvent (BatchIndex: %v)", batchIndex);
                 WaitFor(reader->GetReadyEvent())
                     .ThrowOnError();
+                ++batchIndex;
                 continue;
             }
+
+            {
+                auto rows = batch->MaterializeRows();
+                for (int rowIdx = 0; rowIdx < std::ssize(rows); ++rowIdx) {
+                    auto row = rows[rowIdx];
+                    YT_LOG_DEBUG("@gearonixx   Row %v: ValueCount=%v, Repr=%v",
+                        rowIdx,
+                        static_cast<int>(row.GetCount()),
+                        row);
+                    for (const auto& value : row) {
+                        YT_LOG_DEBUG("@gearonixx     Value: Id=%v, Type=%v, Flags=%v",
+                            value.Id,
+                            value.Type,
+                            value.Flags);
+                    }
+                }
+            }
+            ++batchIndex;
 
             auto rowsRead = batch->GetRowCount();
 

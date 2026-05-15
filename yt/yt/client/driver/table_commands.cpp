@@ -171,6 +171,10 @@ void TReadTableCommand::DoExecute(ICommandContextPtr context)
         .Columnar = (format.GetType() == EFormatType::Arrow)
     };
 
+  //   - reader — откуда брать данные (ITableReader → лезет в мастер + data-ноды, отдаёт сырые TUnversionedRow).
+  // - writer — куда и в каком формате класть (JSON-writer → пишет в HTTP-ответ).
+  // - options — как читать (главное — MaxRowsPerRead, размер батча; плюс флаг Columnar для Arrow).
+
     PipeReaderToWriterByBatches(
         reader,
         writer,

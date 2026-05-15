@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: ytsaurus-client
+Version: 0.13.999.dev0
+Summary: Python wrapper for YTsaurus system and yson parser.
+Author: YTsaurus
+Author-email: dev@ytsaurus.tech
+Keywords: yt python wrapper mapreduce yson
+Dynamic: author
+Dynamic: author-email
+Dynamic: description
+Dynamic: keywords
+Dynamic: summary
+
+It is python library for YTsaurus system that works through http api and supports most of the features. It provides a lot of default behaviour in case of empty tables and absent paths. Also this package provides mapreduce binary (based on python library) that is back compatible with Yamr system.

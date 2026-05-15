@@ -22,6 +22,12 @@ public:
     static void Register(TRegistrar registrar);
 
 private:
+  // Path — TRichYPath, путь к таблице плюс «обвес» (ranges, columns, transaction_id и т.п.), то есть что и как читать.
+  // TableReader — узел YSON с конфигом ридера (буфера, ретраи, размер чанков); приходит из параметров запроса и накладывается поверх дефолтов драйвера.
+  //
+  // ControlAttributes — настройка, какие служебные поля (row_index, range_index, tablet_index, key_switch) подмешивать в выходной поток рядом с данными строки.
+  // Unordered — разрешить читать чанки параллельно без сохранения порядка строк; быстрее, но порядок строк в выходе не гарантируется.
+  // StartRowIndexOnly — выдать только индекс первой строки каждого range и не читать сами данные; используется, когда клиенту нужны только границы, а не содержимое.
     NYPath::TRichYPath Path;
     NYTree::INodePtr TableReader;
     NFormats::TControlAttributesConfigPtr ControlAttributes;

@@ -76,6 +76,8 @@ protected:
     NLogging::TLogger Logger = DriverLogger();
 
     virtual void DoExecute(ICommandContextPtr ) { };
+    // говорит, возвращает ли команда дополнительные структурированные параметры ответа (отдельно от основного output-потока), например метаданные операции; const, потому что только
+    // сообщает свойство класса и ничего не меняет.
     virtual bool HasResponseParameters() const;
 
     void ProduceResponseParameters(

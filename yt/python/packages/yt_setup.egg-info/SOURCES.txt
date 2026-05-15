@@ -1,0 +1,17 @@
+setup.py
+yt_setup/__init__.py
+yt_setup/convert_changelog_to_rst.py
+yt_setup/deploy.py
+yt_setup/doall.py
+yt_setup/find_debian_package.py
+yt_setup/find_pypi_package.py
+yt_setup/generate_python_proto.py
+yt_setup/helpers.py
+yt_setup/os_helpers.py
+yt_setup/prepare_python_modules.py
+yt_setup.egg-info/PKG-INFO
+yt_setup.egg-info/SOURCES.txt
+yt_setup.egg-info/dependency_links.txt
+yt_setup.egg-info/entry_points.txt
+yt_setup.egg-info/requires.txt
+yt_setup.egg-info/top_level.txt

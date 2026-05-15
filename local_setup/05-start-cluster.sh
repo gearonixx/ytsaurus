@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Запуск локального YT-кластера на ХОСТЕ.
+# Перед запуском: venv должен быть активирован (source ~/yt-venv/bin/activate)
+# и должен существовать /tmp/ytserver-all.
+
+set -e
+
+YTSERVER_ALL="${YTSERVER_ALL:-/tmp/ytserver-all}"
+PROXY_PORT="${PROXY_PORT:-8000}"
+FQDN="${FQDN:-localhost}"
+WORKDIR="${WORKDIR:-/tmp/yt_local}"
+
+# Проверки окружения
+command -v yt_local >/dev/null || { echo "yt_local не в PATH. Активируй venv: source ~/yt-venv/bin/activate"; exit 1; }
+[ -x "$YTSERVER_ALL" ]         || { echo "Нет $YTSERVER_ALL. Запусти 04-copy-binary.sh"; exit 1; }
+[ "$(cat /proc/sys/vm/overcommit_memory)" = "1" ] || echo "WARN: vm.overcommit_memory != 1 — запусти 02-prepare-host.sh"
+
+# Поднять soft-лимит на открытые файлы.
+# По умолчанию systemd / docker / login дают 1024 (это soft, hard обычно 524288).
+# YT-сервер регулярно открывает 100+ файлов и сокетов. Без этого через минуты
+# работы упёрся бы в EMFILE.
+ulimit -n 524288 || { echo "Не получилось поднять nofile"; exit 1; }
+echo "ulimit -n = $(ulimit -n)"
+
+# Прибрать старые инстансы (там могут остаться pid-файлы от убитого yt_local)
+mkdir -p "$WORKDIR"
+cd "$WORKDIR"
+rm -rf ./*  # сносим только содержимое /tmp/yt_local/*, не сам каталог
+
+# Запуск. Флаги:
+#   --enable-debug-logging
+#       включает debug-уровень для всех компонентов сразу. Без него debug-логи
+#       пишет только controller-agent (это поведение зашито в configs_provider.py),
+#       и YT_LOG_DEBUG из http_proxy/master/node/scheduler никуда не попадают.
+#       (Этот флаг помечен deprecated в пользу --log-level, но пока работает.)
+#   --enable-structured-logging
+#       включает дополнительные writer'ы в JSON-формате. В logs/ появятся
+#       *.json.log файлы рядом с обычными *.log/*.debug.log. Каждое сообщение
+#       это отдельная JSON-строка с полями timestamp, level, category, message,
+#       trace_id, request_id и attributes (включая всё, что пришло через
+#       TErrorAttribute / YT_LOG_*_WITH_TAGS). Грепать структурой через jq:
+#           jq 'select(.level=="ERROR") | {ts:.timestamp,msg:.message,attrs:.attributes}' \
+#               /tmp/yt_local/*/logs/http-proxy-0.json.log
+#   --proxy-port 8000
+#       HTTP-порт, через который кластер слушает API. На него же будет ходить UI.
+#   --fqdn localhost
+#       что писать в адреса серверов внутри Cypress. Можно `127.0.0.1` или реальный hostname.
+#   --ytserver-all-path
+#       наш свежий бинарь. yt_local запустит его несколько раз с разными аргументами
+#       (как master, как http_proxy, как scheduler и т.д. — это multi-call бинарь).
+#   --sync
+#       блокирующий режим. Команда вернёт управление только когда кластер реально
+#       поднялся и прошёл healthcheck (или упал на старте). Ctrl+C для остановки.
+#       Без --sync команда форкается и сразу выходит, кластер живёт в фоне.
+echo
+echo "=== yt_local start (Ctrl+C для остановки) ==="
+exec yt_local start \
+    --enable-debug-logging \
+    --enable-structured-logging \
+    --proxy-port "$PROXY_PORT" \
+    --fqdn "$FQDN" \
+    --ytserver-all-path "$YTSERVER_ALL" \
+    --sync
+
+# После старта смотри лог в этом же терминале (он будет показывать INFO-сообщения),
+# а dump'ы компонентов — в другом терминале через 07-tail-logs.sh.
