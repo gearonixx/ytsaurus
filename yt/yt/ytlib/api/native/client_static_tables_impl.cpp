@@ -57,7 +57,17 @@ TFuture<ITableReaderPtr> TClient::CreateTableReader(
     const TRichYPath& path,
     const TTableReaderOptions& options)
 {
-    return NNative::CreateTableReader(
+    YT_LOG_DEBUG("@@gearonixx_driver TClient::CreateTableReader wrapper invoked (Path: %v, TransactionId: %v, "
+        "Unordered: %v, OmitInaccessibleColumns: %v)",
+        path,
+        options.TransactionId,
+        options.Unordered,
+        options.OmitInaccessibleColumns);
+
+    YT_LOG_DEBUG("@@gearonixx_driver Delegating to NNative::CreateTableReader with defaults "
+        "(empty NameTable, empty ColumnFilter, UnlimitedBandwidthThrottler, null RpsThrottler)");
+
+    auto future = NNative::CreateTableReader(
         this,
         path,
         options,
@@ -66,6 +76,9 @@ TFuture<ITableReaderPtr> TClient::CreateTableReader(
         /*bandwidthThrottler*/ GetUnlimitedThrottler(),
         /*rpsThrottler*/ nullptr,
         HeavyRequestMemoryUsageTracker_);
+
+    YT_LOG_DEBUG("@@gearonixx_driver NNative::CreateTableReader factory returned future, awaiting DoOpen to resolve it");
+    return future;
 }
 
 TFuture<TSkynetSharePartsLocationsPtr> TClient::LocateSkynetShare(

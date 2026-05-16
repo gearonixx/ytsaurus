@@ -113,21 +113,38 @@ void TReadTableCommand::DoExecute(ICommandContextPtr context)
     Options.EnableRowIndex = ControlAttributes->EnableRowIndex;
     Options.EnableRangeIndex = ControlAttributes->EnableRangeIndex;
     Options.EnableTabletIndex = ControlAttributes->EnableTabletIndex;
+    YT_LOG_DEBUG("@@gearonixx_driver Control attributes applied to options (EnableTableIndex: %v, EnableRowIndex: %v, "
+        "EnableRangeIndex: %v, EnableTabletIndex: %v)",
+        Options.EnableTableIndex,
+        Options.EnableRowIndex,
+        Options.EnableRangeIndex,
+        Options.EnableTabletIndex);
+
     Options.Config = UpdateYsonStruct(
         context->GetConfig()->TableReader,
         TableReader);
+    YT_LOG_DEBUG("@@gearonixx_driver Table reader config built (WindowSize: %v, GroupSize: %v)",
+        Options.Config->WindowSize,
+        Options.Config->GroupSize);
 
     if (StartRowIndexOnly) {
         Options.Config->WindowSize = 1;
         Options.Config->GroupSize = 1;
+        YT_LOG_DEBUG("@@gearonixx_driver StartRowIndexOnly mode: reduced WindowSize and GroupSize to 1");
     }
 
     PutMethodInfoInTraceContext("read_table");
+    YT_LOG_DEBUG("@@gearonixx_driver Method info put in trace context, creating table reader (Path: %v)", Path);
 
     auto reader = WaitFor(context->GetClient()->CreateTableReader(
         Path,
         Options))
         .ValueOrThrow();
+    YT_LOG_DEBUG("@@gearonixx_driver Table reader created (TotalRowCount: %v, StartRowIndex: %v, "
+        "OmittedInaccessibleColumns: %v)",
+        reader->GetTotalRowCount(),
+        reader->GetStartRowIndex(),
+        reader->GetOmittedInaccessibleColumns());
 
     ProduceResponseParameters(context, [&] (IYsonConsumer* consumer) {
         BuildYsonMapFragmentFluently(consumer)
@@ -138,12 +155,16 @@ void TReadTableCommand::DoExecute(ICommandContextPtr context)
                     .Item("start_row_index").Value(reader->GetStartRowIndex());
             });
     });
+    YT_LOG_DEBUG("@@gearonixx_driver Response parameters produced");
 
     if (StartRowIndexOnly) {
+        YT_LOG_DEBUG("@@gearonixx_driver StartRowIndexOnly is set, returning early without reading data");
         return;
     }
 
     auto format = context->GetOutputFormat();
+    YT_LOG_DEBUG("@@gearonixx_driver Output format resolved (FormatType: %v)", format.GetType());
+
     auto writer = CreateStaticTableWriterForFormat(
         format,
         reader->GetNameTable(),
@@ -153,6 +174,7 @@ void TReadTableCommand::DoExecute(ICommandContextPtr context)
         false,
         ControlAttributes,
         0);
+    YT_LOG_DEBUG("@@gearonixx_driver Static table writer created for format");
 
     auto finally = Finally([&] {
         auto dataStatistics = reader->GetDataStatistics();
@@ -170,15 +192,20 @@ void TReadTableCommand::DoExecute(ICommandContextPtr context)
         .MaxRowsPerRead = context->GetConfig()->ReadBufferRowCount,
         .Columnar = (format.GetType() == EFormatType::Arrow)
     };
+    YT_LOG_DEBUG("@@gearonixx_driver Row batch read options prepared (MaxRowsPerRead: %v, Columnar: %v)",
+        options.MaxRowsPerRead,
+        options.Columnar);
 
   //   - reader — откуда брать данные (ITableReader → лезет в мастер + data-ноды, отдаёт сырые TUnversionedRow).
   // - writer — куда и в каком формате класть (JSON-writer → пишет в HTTP-ответ).
   // - options — как читать (главное — MaxRowsPerRead, размер батча; плюс флаг Columnar для Arrow).
 
+    YT_LOG_DEBUG("@@gearonixx_driver Starting PipeReaderToWriterByBatches: piping data from reader to writer");
     PipeReaderToWriterByBatches(
         reader,
         writer,
         options);
+    YT_LOG_DEBUG("@@gearonixx_driver PipeReaderToWriterByBatches finished (WrittenSize: %v)", writer->GetWrittenSize());
 }
 
 bool TReadTableCommand::HasResponseParameters() const

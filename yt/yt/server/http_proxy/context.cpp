@@ -1011,7 +1011,7 @@ void TContext::Run()
     }
 
     if (*ApiVersion_ == 4) {
-        WaitFor(Api_->GetDriverV()->Execute(driverRequest))
+        WaitFor(Api_->GetDriverV4()->Execute(driverRequest))
             .ThrowOnError();
     } else {
         WaitFor(Api_->GetDriverV3()->Execute(driverRequest))

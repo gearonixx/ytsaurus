@@ -2,6 +2,8 @@
 
 #include "client.h"
 
+#include <yt/yt/client/api/private.h>
+
 #include <yt/yt/ytlib/table_client/table_read_spec.h>
 
 #include <yt/yt/ytlib/chunk_client/chunk_reader.h>
@@ -175,11 +177,19 @@ private:
 
     void DoOpen()
     {
+        const auto& Logger = ApiLogger();
+        YT_LOG_DEBUG("@@gearonixx_driver TTableReader::DoOpen started (Path: %v, TransactionId: %v)",
+            RichPath_,
+            TransactionId_);
+
         // Transform NApi::TTableReaderOptions into NTableClient::TTableReader{Options,Config}.
         auto tableReaderConfig = Options_.Config ? Options_.Config : New<TTableReaderConfig>();
         auto tableReaderOptions = ToInternalTableReaderOptions(Options_);
+        YT_LOG_DEBUG("@@gearonixx_driver Reader config and internal options prepared");
 
         auto readSessionId = TReadSessionId::Create();
+        YT_LOG_DEBUG("@@gearonixx_driver Read session id created (ReadSessionId: %v)", readSessionId);
+
         auto fetchTableReadSpecOptions = TFetchSingleTableReadSpecOptions{
             .RichPath = RichPath_,
             .Client = Client_,
@@ -203,12 +213,17 @@ private:
         chunkReadOptions.WorkloadDescriptor = tableReaderConfig->WorkloadDescriptor;
         chunkReadOptions.WorkloadDescriptor.Annotations.push_back(Format("TablePath: %v", RichPath_.GetPath()));
         chunkReadOptions.ReadSessionId = readSessionId;
-
+        YT_LOG_DEBUG("@@gearonixx_driver Chunk read options prepared, fetching table read spec from master");
         auto tableReadSpec = FetchSingleTableReadSpec(fetchTableReadSpecOptions);
         YT_VERIFY(tableReadSpec.DataSourceDirectory->DataSources().size() == 1);
         const auto& dataSource = tableReadSpec.DataSourceDirectory->DataSources().front();
         TableSchema_ = dataSource->Schema();
         OmittedInaccessibleColumns_ = dataSource->OmittedInaccessibleColumns();
+        YT_LOG_DEBUG("@@gearonixx_driver Table read spec fetched (SchemaColumnCount: %v, OmittedInaccessibleColumnCount: %v)",
+            TableSchema_ ? TableSchema_->GetColumnCount() : 0,
+            OmittedInaccessibleColumns_.size());
+
+        YT_LOG_DEBUG("@@gearonixx_driver Creating schemaless multi-chunk reader (Unordered: %v)", Options_.Unordered);
         Reader_ = CreateAppropriateSchemalessMultiChunkReader(
             tableReaderOptions,
             tableReaderConfig,
@@ -222,18 +237,24 @@ private:
             NameTable_,
             ColumnFilter_);
 
+        YT_LOG_DEBUG("@@gearonixx_driver Schemaless multi-chunk reader created, waiting for its ReadyEvent");
         WaitFor(Reader_->GetReadyEvent())
             .ThrowOnError();
 
         StartRowIndex_ = Reader_->GetTableRowIndex();
+        YT_LOG_DEBUG("@@gearonixx_driver Underlying reader is ready (StartRowIndex: %v)", StartRowIndex_);
 
         if (Transaction_) {
             StartListenTransaction(Transaction_);
+            YT_LOG_DEBUG("@@gearonixx_driver Started listening transaction (TransactionId: %v)", TransactionId_);
         }
 
         if (Config_->MaxReadDuration) {
             ReadDeadline_ = NProfiling::GetCpuInstant() + NProfiling::DurationToCpuDuration(*Config_->MaxReadDuration);
+            YT_LOG_DEBUG("@@gearonixx_driver Read deadline set (MaxReadDuration: %v)", Config_->MaxReadDuration);
         }
+
+        YT_LOG_DEBUG("@@gearonixx_driver TTableReader::DoOpen finished successfully");
     }
 };
 
@@ -249,14 +270,26 @@ TFuture<ITableReaderPtr> CreateTableReader(
     IThroughputThrottlerPtr rpsThrottler,
     IMemoryUsageTrackerPtr memoryUsageTracker)
 {
+    const auto& Logger = ApiLogger();
+    YT_LOG_DEBUG("@@gearonixx_driver NNative::CreateTableReader factory invoked (Path: %v, TransactionId: %v)",
+        path,
+        options.TransactionId);
+
     NApi::ITransactionPtr transaction;
     if (options.TransactionId) {
         TTransactionAttachOptions transactionOptions;
         transactionOptions.Ping = options.Ping;
         transactionOptions.PingAncestors = options.PingAncestors;
         transaction = client->AttachTransaction(options.TransactionId, transactionOptions);
+        YT_LOG_DEBUG("@@gearonixx_driver Attached transaction (TransactionId: %v, Ping: %v, PingAncestors: %v)",
+            options.TransactionId,
+            options.Ping,
+            options.PingAncestors);
+    } else {
+        YT_LOG_DEBUG("@@gearonixx_driver No transaction attached (TransactionId is empty)");
     }
 
+    YT_LOG_DEBUG("@@gearonixx_driver Constructing TTableReader instance (will trigger DoOpen via reader-invoker)");
     auto reader = New<TTableReader>(
         options.Config ? options.Config : New<TTableReaderConfig>(),
         options,
@@ -268,8 +301,10 @@ TFuture<ITableReaderPtr> CreateTableReader(
         bandwidthThrottler,
         rpsThrottler,
         std::move(memoryUsageTracker));
+    YT_LOG_DEBUG("@@gearonixx_driver TTableReader constructed, DoOpen scheduled on chunk-reader invoker");
 
     return reader->GetReadyEvent().Apply(BIND([=] () -> ITableReaderPtr {
+        YT_LOG_DEBUG("@@gearonixx_driver TTableReader ReadyEvent resolved (DoOpen finished), returning reader");
         return reader;
     }));
 }
