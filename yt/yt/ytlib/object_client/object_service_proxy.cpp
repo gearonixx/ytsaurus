@@ -1244,6 +1244,8 @@ TError GetCumulativeError(
     return GetCumulativeError(batchRspOrError.Value(), key);
 }
 
+// @gearonixx
+//  Эта функция собирает ошибки из батч-ответа мастера в одну агрегированную ошибку.Эта функция собирает ошибки из батч-ответа мастера в одну агрегированную ошибку.
 TError GetCumulativeError(
     const TObjectServiceProxy::TRspExecuteBatchPtr& batchRsp,
     const std::optional<std::string>& key)

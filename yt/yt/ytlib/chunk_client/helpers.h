@@ -167,6 +167,7 @@ struct TUserObject
 
     // Input
     NYPath::TRichYPath Path;
+    // @gearonixx
     // TODO(babenko): consider making non-optional
     std::optional<NObjectClient::TTransactionId> TransactionId;
 

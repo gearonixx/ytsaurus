@@ -214,16 +214,28 @@ void GetUserObjectBasicAttributes(
 
     YT_LOG_DEBUG("Getting basic attributes of user objects");
 
+    // @gearonixx прокси к Object Service мастера — просто обёртка над RPC-каналом, сети тут ещё нет.
+    // # Короче — это «адаптер»: переводит вызовы C++ методов в правильные RPC сообщения нужному мастеру.
     auto proxy = CreateObjectServiceReadProxy(client, options.ReadFrom);
+    // @gearonixx пустой "конверт" для пачки запросов; накапливается в памяти клиента.
+    // ExecuteBatch — это специальный метод Object Service мастера, который умеет принимать много мелких YPath-запросов одним RPC.
+    // ез него каждый GetBasicAttributes/Get/Set пришлось бы слать отдельным сетевым
+    // вызовом — это медленно и грузит мастер.
     auto batchReq = proxy.ExecuteBatch();
 
     for (auto* userObject : objects) {
+        // @gearonixx один запрос GetBasicAttributes; путь либо "#<guid>" если ObjectId уже знаем, либо строковый "//home/x/table".
         auto req = TObjectYPathProxy::GetBasicAttributes(userObject->GetObjectIdPathIfAvailable());
+        // @gearonixx какое право должен проверить мастер (Read/Write/...).
         req->set_permission(ToProto(permission));
+        // @gearonixx флаги: вернуть ли в ответе колонки/строки без доступа или просто их умолчать.
         req->set_omit_inaccessible_columns(options.OmitInaccessibleColumns);
         req->set_omit_inaccessible_rows(options.OmitInaccessibleRows);
+        // @gearonixx попросить мастер заодно вернуть security-tags.
         req->set_populate_security_tags(options.PopulateSecurityTags);
+        // @gearonixx если в пути указан подсет колонок (table{a,b,c}) — передаём их мастеру.
         if (auto optionalColumns = userObject->Path.GetColumns()) {
+            // @gearonixx при rename-колонках мастеру нужны ОРИГИНАЛЬНЫЕ имена, не алиасы.
             if (options.RenameColumns) {
                 if (auto renameDescriptors = userObject->Path.GetColumnRenameDescriptors()) {
                     BuildOriginalColumnNames(&*optionalColumns, *renameDescriptors);
@@ -231,21 +243,37 @@ void GetUserObjectBasicAttributes(
             }
             auto* protoColumns = req->mutable_columns();
             for (const auto& column : *optionalColumns) {
+                // @gearonixx ToProto: std::string -> proto-строка.
                 protoColumns->add_items(ToProto(column));
             }
         }
+        // @gearonixx ЛОКАЛЬНАЯ метка (по сети не уходит): сохраняем указатель, чтобы из ответа понять, в какой TUserObject писать результат.
         req->Tag() = userObject;
-        NNative::SetCachingHeader(req, client->GetNativeConnection(), options);
-        NCypressClient::SetTransactionId(req, userObject->TransactionId.value_or(defaultTransactionId));
-        NCypressClient::SetSuppressAccessTracking(req, options.SuppressAccessTracking);
-        NCypressClient::SetSuppressExpirationTimeoutRenewal(req, options.SuppressExpirationTimeoutRenewal);
+        // @gearonixx служебные заголовки запроса:
+        NNative::SetCachingHeader(req, client->GetNativeConnection(), options);            // @gearonixx настройки кеша
+        NCypressClient::SetTransactionId(req, userObject->TransactionId.value_or(defaultTransactionId)); // @gearonixx в какой транзакции читать
+        NCypressClient::SetSuppressAccessTracking(req, options.SuppressAccessTracking);    // @gearonixx не обновлять access_time
+        NCypressClient::SetSuppressExpirationTimeoutRenewal(req, options.SuppressExpirationTimeoutRenewal); // @gearonixx не продлевать TTL
+        // @gearonixx добавляем готовый запрос в батч (только в память, не в сеть).
         batchReq->AddRequest(req);
     }
+  //
+  //   Потому что ответ rsp — это protobuf-сообщение, прилетевшее по сети. Внутри него object_id лежит не как TGuid, а как сгенерированная protobuf-структура из двух uint64 (first/second). Чтобы получить
+  // нормальный TGuid для C++ кода, надо явно распаковать — этим и занимается FromProto<TObjectId>(...). Прямо присвоить нельзя: типы разные.
 
+    // @gearonixx ВОТ ТУТ единственный сетевой вызов: Invoke() сериализует все req в один RPC-пакет и шлёт мастеру; WaitFor блокирует файбер до ответа.
+    // request to master
     auto batchRspOrError = WaitFor(batchReq->Invoke());
     THROW_ERROR_EXCEPTION_IF_FAILED(GetCumulativeError(batchRspOrError), "Error getting basic attributes of user objects");
     const auto& batchRsp = batchRspOrError.Value();
 
+    // for каждый ответ из батча:
+    //      rsp = развернуть_ответ(rspOrError)            // кинет исключение, если ошибка
+    //      userObject = достать_из_тега(rsp)             // тот же TUserObject*, что клали при отправке
+    //      userObject.ObjectId = распаковать_guid(rsp.object_id)   // proto {high,low} -> TGuid
+
+
+// response from master
     for (const auto& rspOrError : batchRsp->GetResponses<TObjectYPathProxy::TRspGetBasicAttributes>()) {
         const auto& rsp = rspOrError.Value();
         auto* userObject = std::any_cast<TUserObject*>(rsp->Tag());
@@ -928,6 +956,11 @@ TUserObject::TUserObject(
 
 bool TUserObject::IsPrepared() const
 {
+    //
+    // Не nullptr, а нулевой TGuid ({0,0,0,0}) —
+    // TObjectId это alias на TGuid, а не указатель.
+    // Проверка if (userObject->ObjectId) срабатывает через operator bool у TGuid, который true только если хотя бы один из
+    // четырёх uint32 ненулевой.
     return static_cast<bool>(ObjectId);
 }
 

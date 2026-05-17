@@ -113,6 +113,12 @@ void TReadTableCommand::DoExecute(ICommandContextPtr context)
     Options.EnableRowIndex = ControlAttributes->EnableRowIndex;
     Options.EnableRangeIndex = ControlAttributes->EnableRangeIndex;
     Options.EnableTabletIndex = ControlAttributes->EnableTabletIndex;
+
+
+  //   - EnableTableIndex — добавить номер входной таблицы (если читаем несколько таблиц сразу, например в map-операции с несколькими входами).
+  // - EnableRowIndex — добавить порядковый индекс строки внутри её таблицы.
+  // - EnableRangeIndex — добавить номер диапазона из read spec (если читаем таблицу не целиком, а несколькими range'ами — [a:b], [c:d] — для каждой строки видно, в каком range она лежала).
+  // - EnableTabletIndex — для ordered dynamic table добавить номер таблета, из которого пришла строка.
     YT_LOG_DEBUG("@@gearonixx_driver Control attributes applied to options (EnableTableIndex: %v, EnableRowIndex: %v, "
         "EnableRangeIndex: %v, EnableTabletIndex: %v)",
         Options.EnableTableIndex,

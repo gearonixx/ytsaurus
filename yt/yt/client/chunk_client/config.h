@@ -261,6 +261,8 @@ struct TReplicationReaderConfig
 DEFINE_REFCOUNTED_TYPE(TReplicationReaderConfig)
 
 ////////////////////////////////////////////////////////////////////////////////
+///
+/// Это конфиг для block fetcher — компонента, который подгружает блоки данных таблицы с data-нод при чтении.
 
 struct TBlockFetcherConfig
     : public virtual NYTree::TYsonStruct

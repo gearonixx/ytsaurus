@@ -157,6 +157,9 @@ TTableReadSpec FetchRegularTableReadSpec(
             options.RichPath.GetTimestamp().value_or(AsyncLastCommittedTimestamp),
             options.RichPath.GetRetentionTimestamp().value_or(NullTimestamp),
             /*columnRenameDescriptors*/ {});
+        // @gearonixx @@IMPORTANT
+        // а, в обеих ветках if/else: dataSource->SetObjectId(userObject->ObjectId)
+        // — макрос DEFINE_BYVAL_RW_PROPERTY генерирует сеттер SetObjectId, который сюда и зовётся.
         dataSource->SetObjectId(userObject->ObjectId);
         dataSource->SetAccount(account);
         dataSliceDescriptors.emplace_back(std::move(chunkSpecs));
@@ -201,6 +204,8 @@ TTableReadSpec FetchSingleTableReadSpec(const TFetchSingleTableReadSpecOptions& 
 
     YT_LOG_INFO("Opening table reader");
 
+    //  Никак — конструктор просто кладёт путь в поле Path, всё остальное (ObjectId, Type, ExternalCellTag…) остаётся пустым/default. Реальный резолв пути → ObjectId происходит на следующем шаге, в
+    // GetUserObjectBasicAttributes: он шлёт RPC на мастер, тот превращает Кипарис-путь в ObjectId и атрибуты, и ответ записывается обратно в эту же структуру.
     auto userObject = std::make_unique<TUserObject>(options.RichPath);
 
     GetUserObjectBasicAttributes(

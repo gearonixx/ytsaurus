@@ -224,6 +224,7 @@ private:
         // @gearonixx Если пользователь не передал свой TTableReaderConfig — создаём
         // конфиг по умолчанию (New<T> — это аналог std::make_shared для YT-объектов
         // с интрузивным рефкаунтом, TIntrusivePtr).
+        // ohhh yeah
         auto tableReaderConfig = Options_.Config ? Options_.Config : New<TTableReaderConfig>();
         // @gearonixx Конвертируем "клиентские" опции (NApi уровня) во "внутренние"
         // опции table_client — там живут флаги вроде EnableRowIndex / EnableRangeIndex,
@@ -235,6 +236,7 @@ private:
         // подзапросы (к мастеру, к нодам), чтобы по логам можно было собрать
         // одну цепочку обращений, относящихся к этому открытию таблицы.
         auto readSessionId = TReadSessionId::Create();
+        // Read session id created (ReadSessionId: 214c5969-cde576a9-3707bf31-4bf14a95)
         YT_LOG_DEBUG("@@gearonixx_driver Read session id created (ReadSessionId: %v)", readSessionId);
 
         // @gearonixx Собираем "запрос к мастеру": какой путь читаем, в какой
@@ -275,6 +277,8 @@ private:
         // @gearonixx Аннотации workload — это просто строки, которые попадают в
         // логи на нодах. Добавляем путь таблицы, чтобы по логу ноды было видно,
         // ради чтения какой таблицы пришёл запрос.
+        // Просто берёт массив Parts32[4] (4 куска по 32 бита внутри тех же 16 байтов union'а) и печатает каждый в hex через дефис — Parts32[3]-Parts32[2]-Parts32[1]-Parts32[0] (в обратном порядке). То есть
+        // 214c5969-cde576a9-3707bf31-4bf14a95 это четыре 32-битных числа в hex.
         chunkReadOptions.WorkloadDescriptor.Annotations.push_back(Format("TablePath: %v", RichPath_.GetPath()));
         chunkReadOptions.ReadSessionId = readSessionId;
         YT_LOG_DEBUG("@@gearonixx_driver Chunk read options prepared, fetching table read spec from master");
