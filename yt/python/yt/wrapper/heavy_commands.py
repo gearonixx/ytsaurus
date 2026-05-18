@@ -343,6 +343,13 @@ def _get_read_progress_reporter(size_hint, filename_hint, client, filelike=False
         return _FakeFileProgressReporter()
 
 
+# wrapper/heavy_commands.py — это общий движок для стриминговых / «тяжёлых» команд передачи данных в Python-wrapper’е, то есть для всего,
+# что прокачивает через proxy большие объёмы строк или байтов, в отличие от лёгких Cypress RPC-вызовов (get/set/list и т.п.), которые
+# находятся в cypress_commands.py и просто идут через driver.make_request.
+
+# чтобы чтение большой таблицы было ретраебельным, код сначала создаёт транзакцию и берёт snapshot-lock на ноду
+# то фиксирует версию данных
+
 def make_read_request(command_name, path, params, process_response_action, retriable_state_class, client,
                       filename_hint=None, request_size=False):
     assert isinstance(path, YPath)
@@ -388,6 +395,10 @@ def make_read_request(command_name, path, params, process_response_action, retri
             reporter = _get_read_progress_reporter(size_hint, filename_hint, client, filelike=False)
 
             # NB: __exit__() is done in __del__()
+            # @gearonixx
+            # Read table — это долгий стрим на минуты.Read table — это долгий стрим на минуты. Пока он качается, таблицу могут перезаписать или удалить.
+            # Транзакция + snapshot-lock фиксируют конкретную версию таблицы: писать в неё не мешают, но старые чанки не дадут удалить, пока идёт чтение.
+            # Поэтому стрим (и любой ретрай при обрыве) всегда читает один и тот же неизменный снимок, а не наполовину обновлённые данные.
             reporter.__enter__()
             return ResponseStreamWithReadRow(
                 get_response=lambda: iterator.last_response,

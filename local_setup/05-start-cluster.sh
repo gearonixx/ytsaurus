@@ -9,10 +9,23 @@ YTSERVER_ALL="${YTSERVER_ALL:-/tmp/ytserver-all}"
 PROXY_PORT="${PROXY_PORT:-8000}"
 FQDN="${FQDN:-localhost}"
 WORKDIR="${WORKDIR:-/tmp/yt_local}"
+RPC_PROXY_COUNT="${RPC_PROXY_COUNT:-1}"
 
 # Проверки окружения
 command -v yt_local >/dev/null || { echo "yt_local не в PATH. Активируй venv: source ~/yt-venv/bin/activate"; exit 1; }
 [ -x "$YTSERVER_ALL" ]         || { echo "Нет $YTSERVER_ALL. Запусти 04-copy-binary.sh"; exit 1; }
+
+# yt_local — это всего лишь shebang на /usr/bin/env python3 в исходниках, он
+# не падает, если python не может импортировать yt.local. Видимый симптом —
+# `ModuleNotFoundError: No module named 'yt.local'` при попытке стартануть.
+# Чаще всего это означает: editable-инсталл `ytsaurus-client-trunk-dev/build/`
+# не подключён (см. историю в 03-install-host-python.sh). Падаем заранее
+# с понятным сообщением.
+if ! python -c "import yt.local" 2>/dev/null; then
+    echo "import yt.local упал — editable-инсталл сломан или не сделан."
+    echo "Перезапусти 03-install-host-python.sh (он перезальёт build/ и проверит импорт)."
+    exit 1
+fi
 [ "$(cat /proc/sys/vm/overcommit_memory)" = "1" ] || echo "WARN: vm.overcommit_memory != 1 — запусти 02-prepare-host.sh"
 
 # Поднять soft-лимит на открытые файлы.
@@ -52,6 +65,10 @@ rm -rf ./*  # сносим только содержимое /tmp/yt_local/*, н
 #       блокирующий режим. Команда вернёт управление только когда кластер реально
 #       поднялся и прошёл healthcheck (или упал на старте). Ctrl+C для остановки.
 #       Без --sync команда форкается и сразу выходит, кластер живёт в фоне.
+#   --rpc-proxy-count N
+#       сколько RPC-прокси поднять. По умолчанию yt_local запускает 0 — тогда
+#       //sys/rpc_proxies пуст и любой клиент с backend=rpc упадёт на discovery
+#       (см. 10-test-table-rpc.sh). Ставим 1, чтобы и HTTP, и RPC backend работали.
 echo
 echo "=== yt_local start (Ctrl+C для остановки) ==="
 exec yt_local start \
@@ -59,6 +76,7 @@ exec yt_local start \
     --enable-structured-logging \
     --proxy-port "$PROXY_PORT" \
     --fqdn "$FQDN" \
+    --rpc-proxy-count "$RPC_PROXY_COUNT" \
     --ytserver-all-path "$YTSERVER_ALL" \
     --sync
 

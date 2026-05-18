@@ -1198,6 +1198,13 @@ void TContext::ReplyError(const TError& error)
     NHttpProxy::ReplyError(Response_, error);
 }
 
+// @gearonixx creation_time у read_table сюда не приходит и в http_proxy вообще не вычисляется:
+// драйвер (yt/client/driver/table_commands.cpp:155) кладёт в OutputParameters_ только
+// approximate_row_count / omitted_inaccessible_columns / start_row_index, и именно их этот метод
+// сериализует в заголовок X-YT-Response-Parameters. Сам атрибут @creation_time живёт у TCypressNode
+// на мастере (выставляется в cypress_manager.cpp:3427 как hydraContext->GetTimestamp() при создании
+// узла, отдаётся в node_proxy_detail.cpp:829-831) и приезжает клиенту только отдельным Get("//path/@"),
+// а не в составе ответа на read_table.
 void TContext::OnOutputParameters()
 {
     auto idNode = OutputParameters_->FindChild("id");

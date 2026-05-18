@@ -55,6 +55,17 @@ echo "=== 3. Запускаем install_locally.sh ==="
 #
 # Заметка про typo: внутри есть `echo "import linked yt.wraper - ok"` — это
 # опечатка апстрима (wraper вместо wrapper), на работоспособность не влияет.
+#
+# Грабли «build/ из Docker»: если репо когда-то собирался в контейнере, в
+# ytsaurus-client-trunk-dev/build/yt/ остаются симлинки на /workspace/... .
+# На хосте они dangling, и любой второй заход без `rm -rf build/` оставит
+# мёртвые симлинки. install_locally.sh снесёт всё сам (`rm -rf build/*`), но
+# делаем это явно — чтобы при дебаге не возникало вопросов «откуда там
+# /workspace».
+BUILD_DIR="$REPO_ROOT/yt/python/packages/ytsaurus-client-trunk-dev/build"
+if [ -d "$BUILD_DIR" ]; then
+    rm -rf "$BUILD_DIR"
+fi
 cd "$REPO_ROOT/yt/python/packages/ytsaurus-client-trunk-dev/"
 ./install_locally.sh
 
@@ -81,6 +92,31 @@ echo
 echo "=== 6. Проверка ==="
 which yt_local
 yt_local --help | head -10
+
+echo
+echo "=== 7. Sanity check editable-инсталла ==="
+# Главный класс ошибок, который привёл к появлению этого шага:
+#   * site-packages/yt/ остался пустым каталогом → `import yt` находит его как
+#     namespace package, но `yt.local` отсутствует → `yt_local` падает с
+#     `ModuleNotFoundError: No module named 'yt.local'`.
+#   * build/yt/<pkg> — болтающийся симлинк на /workspace/... (Docker-артефакт),
+#     `import yt.wrapper` не находит файлы.
+# Проверяем явно: импорт ключевых подмодулей должен вернуть пути ВНУТРИ
+# build-каталога (или симлинки оттуда на репо).
+EXPECTED_PREFIX="$REPO_ROOT/yt/python"
+for mod in yt.local yt.wrapper yt.environment; do
+    path="$(python -c "import $mod, os; print(os.path.realpath($mod.__file__))" 2>&1 || true)"
+    case "$path" in
+        "$EXPECTED_PREFIX"/*)
+            echo "  ok   $mod -> $path"
+            ;;
+        *)
+            echo "  FAIL $mod -> $path"
+            echo "       editable-инсталл не работает. См. install_locally.sh."
+            exit 1
+            ;;
+    esac
+done
 
 echo
 echo "OK"

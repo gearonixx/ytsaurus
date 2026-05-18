@@ -465,6 +465,8 @@ def read_table(**kwargs):
     if "as_json_list" in kwargs:
         kwargs.pop("as_json_list")
 
+    # {'table': '//home/input_table_rpc_3', 'format': "json", 'table_reader': None, 'control_attributes': None, 'unordered': False}
+    print("[gearonixx] read_table kwargs:", kwargs, file=sys.stderr)
     stream = yt.read_table(**kwargs)
     if hasattr(stream, "_read_rows"):
         iterator = chunk_iter_rows(stream, yt.config["read_buffer_size"])

@@ -469,7 +469,7 @@ def _check_warnings_for_parallel_read(attributes, table, control_attributes):
     return False
 
 
-class _ReadTableRetriableState(object):
+class ReadTableRetriableState(object):
     def __init__(self, params, client, process_response_action):
         self.params = params
         self.client = client
@@ -797,16 +797,52 @@ def _get_table_attributes(table, client):
 
 
 def read_table(
+    # Что читаем. Строка-YPath ("//home/foo", "//home/foo[#10:#100]{id,text}")
+    # либо TablePath с явными диапазонами/колонками/exact_key. Внутри
+    # нормализуется в TablePath(table, client=client) — line 832.
     table: Union[str, "TablePath"],
+    # Формат сериализации строк сервером: "json"/"yson"/"dsv"/"skiff"/"protobuf"
+    # или Format-объект. None → берётся client_config["format"] (по умолчанию YSON).
+    # Прогоняется через _prepare_command_format() — line 833.
     format: Union[str, Format, None] = None,
+    # Низкоуровневый конфиг ридера, улетает на сервер as-is. Примеры:
+    # {"workload_descriptor": {"category": "user_batch"}},
+    # {"unavailable_chunk_strategy": "skip"},
+    # {"max_read_duration": 60000}.
     table_reader: Optional[Dict[str, Any]] = None,
+    # Control rows — служебные строки-маркеры между данными:
+    # {"enable_row_index": True, "enable_range_index": True, "enable_table_index": True}.
+    # В потоке появятся {"$row_index": 42} и т.п. Нужны при чтении нескольких
+    # диапазонов/таблиц, чтобы понять где какая.
     control_attributes: Optional[Dict[str, Any]] = None,
+    # Разрешить серверу выдавать строки в произвольном порядке ради скорости.
+    # По умолчанию читается строго по chunk-order. Параллельные ридеры на
+    # сервере не блокируют друг друга.
     unordered: Optional[bool] = None,
+    # True → вернуть ResponseStream (сырые байты в выбранном формате) для
+    # дальнейшего пайпа в stdout/файл. False (default) → итератор Python-
+    # объектов через format.load_rows(response). CLI ставит raw=True.
+    # Если None — берётся client_config["default_value_of_raw_option"] (line 830).
     raw: Optional[bool] = None,
+    # Изменяемый dict, в который функция допишет ответную метадату:
+    # start_row_index, approximate_row_count. Передавай пустой {}; после
+    # вызова — читаешь. Это потому что результат — стрим, и метадату нельзя
+    # вернуть вторым значением. См. process_response() ниже.
     response_parameters: Optional[Dict[str, Any]] = None,
+    # Включает КЛИЕНТСКОЕ распараллеливание: wrapper нарезает таблицу на
+    # диапазоны и читает их в read_parallel.max_thread_count потоков, потом
+    # склеивает. Порядок не гарантируется, память выше. Выключено по
+    # умолчанию. См. make_read_parallel_request() ниже.
     enable_read_parallel: Optional[bool] = None,
+    # Columnar ACL: если у тебя есть права на таблицу, но не на отдельные
+    # колонки — без флага запрос упадёт Access denied. С флагом — недоступные
+    # колонки тихо вырезаются из вывода.
     omit_inaccessible_columns: Optional[bool] = None,
+    # Row-level ACL для динамических таблиц: пропустить строки, на которые
+    # нет прав, вместо ошибки.
     omit_inaccessible_rows: Optional[bool] = None,
+    # Какой YtClient использовать (свой proxy/token/config). None → глобальный
+    # из yt.config. Передаётся явно когда ходишь в несколько кластеров.
     client=None,
 ):
     """Reads rows from table and parse (optionally).
@@ -823,6 +859,20 @@ def read_table(
     command is executed under self-pinged transaction with retries and snapshot lock on the table.
     This transaction is alive until your finish reading your table, or call `close` method of ResponseStream.
     """
+
+#     функция read_table(table):
+#     config = get_config()
+#     attributes = get_table_attributes(table)
+#     params = { path: table, format: ... }
+#
+#     если параллельное_чтение_включено и таблица_поддерживает:
+#     ranges = нарезать_таблицу_на_куски(attributes)
+#     вернуть читать_в_несколько_потоков(table, ranges, params)
+#
+# # иначе — обычное последовательное чтение
+    # allow_retries = не таблица_динамическая
+    # вернуть читать_последовательно(table, params)
+
     client_config = get_config(client)
 
     if raw is None:
@@ -921,6 +971,12 @@ def read_table(
             raise YtIncorrectResponse("X-YT-Response-Parameters missing (bug in proxy)", response._get_response())
         set_response_parameters(response.response_parameters)
 
+    # allowretries = not attributes.allow_retries = not attributes.get("dynamic") — ретраи разрешены только для статических таблиц;
+    # для динамических allow_retries = False
+
+    # Причина: статическая таблица иммутабельна при чтении, поэтому если запрос оборвался, его можно безопасно повторить с того же места и получить тот
+    # же результат. Динамическая таблица меняется под чтением (идут вставки/обновления), и повтор запроса может вернуть несогласованные
+    # данные или дубли/пропуски строк
     allow_retries = not attributes.get("dynamic")
 
     # For read commands response is actually ResponseStream
@@ -929,11 +985,15 @@ def read_table(
         table,
         params,
         process_response_action=process_response,
-        retriable_state_class=_ReadTableRetriableState if allow_retries else None,
+        retriable_state_class=ReadTableRetriableState if allow_retries else None,
         client=client,
         filename_hint=str(table))
 
     if raw:
+        print("[gearonixx] response type:", type(response).__name__)
+        print("[gearonixx] response repr:", repr(response))
+        print("[gearonixx] response_parameters:", response.response_parameters)
+        print("[gearonixx] underlying:", response._get_response())
         return response
     else:
         return format.load_rows(response)

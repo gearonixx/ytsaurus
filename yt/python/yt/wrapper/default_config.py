@@ -1338,7 +1338,10 @@ def _update_from_env_vars(
 
 
 def _update_from_env_patch(config: VerifiedDict):
+    import sys
     if "YT_CONFIG_PATCHES" in os.environ:
+        print("[gearonixx] YT_CONFIG_PATCHES raw:", os.environ["YT_CONFIG_PATCHES"], file=sys.stderr)
+        print("[gearonixx] test")
         try:
             patches = yson._loads_from_native_str(os.environ["YT_CONFIG_PATCHES"],
                                                   yson_type="list_fragment",
@@ -1346,11 +1349,17 @@ def _update_from_env_patch(config: VerifiedDict):
         except yson.YsonError as e:
             raise YtConfigError("Failed to parse YT config patches from 'YT_CONFIG_PATCHES' environment variable") from e
 
+        patches_list = list(patches)
+        print("[gearonixx] parsed patches:", patches_list, file=sys.stderr)
         try:
-            for patch in reversed(list(patches)):
+            for patch in reversed(patches_list):
+                print("[gearonixx] applying patch:", patch, file=sys.stderr)
                 common.update_inplace(config, patch)
         except Exception as e:  # noqa
             raise YtConfigError("Failed to apply config from 'YT_CONFIG_PATCHES' environment variable") from e
+        print("[gearonixx] after patches config['backend']:", config.get("backend"), file=sys.stderr)
+    else:
+        print("[gearonixx] YT_CONFIG_PATCHES not set", file=sys.stderr)
 
 
 class ConfigParserV2:
