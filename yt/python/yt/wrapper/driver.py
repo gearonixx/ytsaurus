@@ -24,6 +24,12 @@ _DEFAULT_COMMAND_PARAMS = {
 }
 
 
+
+# Serializes the first-time init of the per-client "_created_with_pids" option
+# so two concurrent first-requests can't both observe None and race to set_option.
+_CREATED_WITH_PIDS_LOCK = threading.Lock()
+
+
 def get_commands_description(client=None):
     if get_option("_client_type", client) == "batch":
         raise YtError("Command \"get_commands_description\" is not supported in batch mode")
@@ -78,15 +84,39 @@ def make_request(command_name,
                  mutation_id=None,
                  client=None):
 
+    print("[make_request] client =", repr(client))
+
     if client:
-        client_created_with_pids = get_option("_created_with_pids", client)
-        if not client_created_with_pids:
-            client_created_with_pids = (os.getpid(), threading.get_ident())
-            set_option("_created_with_pids", client_created_with_pids, client)
-        if client_created_with_pids[0] == os.getpid() and client_created_with_pids[1] != threading.get_ident():
-            logger.debug("WARNING. Do not use one YtClient in different threads")
+        print("[make_request] client is truthy, entering pid/thread check")
+        current_pid = os.getpid()
+        current_tid = threading.get_ident()
+        with _CREATED_WITH_PIDS_LOCK:
+            client_created_with_pids = get_option("_created_with_pids", client)
+            print("[make_request] client_created_with_pids (from option) =", repr(client_created_with_pids))
+            if not client_created_with_pids:
+                client_created_with_pids = (current_pid, current_tid)
+                print("[make_request] initializing client_created_with_pids =", repr(client_created_with_pids))
+                set_option("_created_with_pids", client_created_with_pids, client)
+                print("[make_request] set_option('_created_with_pids', ...) done")
+                first_time = True
+            else:
+                first_time = False
+        print("[make_request] current pid =", current_pid, "current tid =", current_tid)
+        print("[make_request] stored  pid =", client_created_with_pids[0], "stored  tid =", client_created_with_pids[1])
+        if not first_time:
+            stored_pid, stored_tid = client_created_with_pids
+            if stored_pid != current_pid:
+                print("[make_request] WARNING: YtClient used across processes (fork?) — stored pid", stored_pid, "current pid", current_pid)
+                logger.warning("Do not use one YtClient across processes (stored pid=%s, current pid=%s)",
+                               stored_pid, current_pid)
+            elif stored_tid != current_tid:
+                print("[make_request] WARNING: same pid but different thread — cross-thread YtClient usage")
+                logger.warning("Do not use one YtClient in different threads")
+    else:
+        print("[make_request] client is falsy, skipping pid/thread check")
 
     backend = get_backend_type(client)
+    print("[make_request] backend =", repr(backend))
 
     command_params = deepcopy(get_option("COMMAND_PARAMS", client))
 

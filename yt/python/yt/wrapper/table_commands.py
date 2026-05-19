@@ -994,6 +994,9 @@ def read_table(
         print("[gearonixx] response repr:", repr(response))
         print("[gearonixx] response_parameters:", response.response_parameters)
         print("[gearonixx] underlying:", response._get_response())
+        # [gearonixx] first 200 bytes: b'{"id":0,"text":"Hello"}\n{"id":1,"text":"World!"}\n'
+        # head = response.read(200)  # forces real bytes to flow
+        # print("[gearonixx] first 200 bytes:", head)
         return response
     else:
         return format.load_rows(response)

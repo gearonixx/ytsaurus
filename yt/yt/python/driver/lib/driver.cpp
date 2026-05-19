@@ -101,7 +101,16 @@ Py::Object TDriverBase::Execute(Py::Tuple& args, Py::Dict& kwargs)
     TTraceContextPtr traceContext;
     // Note that trace_id attribute may be missing in case of an old Python caller,
     // trying to keep compatibility here.
+    
+    // Распределённая трассировка — это сквозной id (trace_id), который вешается на запрос при его рождении и таскается через все сервисы/слои, 
+    // которые этот запрос об…Распределённая трассировка — это сквозной id (trace_id), который вешается на запрос при его рождении
+    // @@UPSTREAM @gearonixx
+    // @typo typo
+    // и таскается через все сервисы/слои, которые этот запрос обрабатывает; благодаря нему по логам можно собрать полный путь одного запроса 
+    // (Python-клиент → C++ driver → дальше по кластеру), а не разрозненные куски.
     if (auto traceIdObject = FindAttr(pyRequest, "trace_id"); traceIdObject && !traceIdObject->isNone()) {
+        // @gearonixx
+        // то конкретное место, где C++-часть «подхватывает» трейс, начатый в Python, а не заводит свой.
         auto traceIdString = ConvertStringObjectToString(*traceIdObject);
         TTraceId traceId;
         if (!TTraceId::FromString(traceIdString, &traceId)) {
@@ -180,6 +189,7 @@ Py::Object TDriverBase::Execute(Py::Tuple& args, Py::Dict& kwargs)
     }
 
     try {
+        //  UnderlyingDriver_->Execute(request) (строка 183) → дальше уже yt/yt/client/driver/driver.cpp.
         auto driverResponse = UnderlyingDriver_->Execute(request);
         response->SetResponse(driverResponse);
         response->SetTraceContextFinishGuard(TTraceContextFinishGuard(std::move(traceContext)));

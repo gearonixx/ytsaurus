@@ -38,7 +38,12 @@ set -e
 
 export YT_PROXY="${YT_PROXY:-localhost:8000}"
 
-command -v yt >/dev/null || { echo "yt CLI не в PATH. Активируй venv: source ~/yt-venv/bin/activate"; exit 1; }
+# Форсим yt из ~/yt-venv. Иначе PATH может вытащить pipx'овский ~/.local/bin/yt
+# (у него отдельный сломанный Python 3.14 без yt.packages.requests — любой `yt ...`
+# валится на импорте ещё до сети). См. troubleshooting.md.
+VENV="${VENV:-$HOME/yt-venv}"
+[ -x "$VENV/bin/yt" ] || { echo "Нет $VENV/bin/yt. Запусти 03-install-host-python.sh"; exit 1; }
+export PATH="$VENV/bin:$PATH"
 
 # --- Проверка биндингов ---------------------------------------------------
 # yt_driver_rpc_bindings содержит driver_rpc_lib*.so — C++ Driver, который умеет
@@ -80,7 +85,9 @@ fi
 # RPC-прокси регистрируются в //sys/rpc_proxies (см. yt_env.py:929-946).
 # Если список пуст — RPC-прокси не подняты и discovery вернёт пустой набор
 # эндпоинтов; запрос упадёт с "no rpc proxies available".
-rpc_proxies=$(yt list //sys/rpc_proxies 2>/dev/null || true)
+# НЕ глотаем stderr: если `yt` падает на импорте (сломанный pipx, не та версия),
+# хотим видеть стектрейс, а не загадочное «пусто → нет RPC-прокси».
+rpc_proxies=$(yt list //sys/rpc_proxies)
 if [ -z "$rpc_proxies" ]; then
     echo "В //sys/rpc_proxies пусто — кластер поднят без RPC-прокси."
     echo "Перезапусти кластер с --rpc-proxy-count 1 (см. комментарии в скрипте)."

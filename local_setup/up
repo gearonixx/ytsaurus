@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Один вход: venv → sysctl → бинарь → старт кластера.
+# Покрывает рутинную последовательность: source venv, 04-copy-binary, 05-start-cluster.
+# 02-prepare-host вызывается только если overcommit_memory сбросился (после ребута).
+# 01/03 — одноразовые, дёргать их здесь не надо.
+
+set -e
+
+VENV="${VENV:-$HOME/yt-venv}"
+YTSERVER_ALL="${YTSERVER_ALL:-/tmp/ytserver-all}"
+
+cd "$(dirname "$0")"
+
+[ -f "$VENV/bin/activate" ] || { echo "Нет $VENV/bin/activate. Запусти 03-install-host-python.sh"; exit 1; }
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+if [ "$(cat /proc/sys/vm/overcommit_memory)" != "1" ]; then
+    echo "=== vm.overcommit_memory != 1 — прогоняю 02-prepare-host.sh ==="
+    ./02-prepare-host.sh
+fi
+
+if [ ! -x "$YTSERVER_ALL" ]; then
+    echo "=== Нет $YTSERVER_ALL — забираю бинарь из контейнера ==="
+    ./04-copy-binary.sh
+fi
+
+exec ./05-start-cluster.sh

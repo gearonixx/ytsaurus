@@ -223,6 +223,29 @@ def make_write_request(command_name, stream, path, params, create_object, use_re
 
 
 def _get_read_response(command_name, params, transaction_id, client=None):
+    try:
+        print("[_get_read_response] command_name =", repr(command_name))
+    except Exception as _e:
+        print("[_get_read_response] command_name <unprintable>:", type(_e).__name__)
+    try:
+        print("[_get_read_response] params =", repr(params))
+    except Exception as _e:
+        print("[_get_read_response] params <unprintable>:", type(_e).__name__)
+    try:
+        print("[_get_read_response] return_content =", False)
+        print("[_get_read_response] use_heavy_proxy =", True)
+        print("[_get_read_response] allow_retries =", False)
+    except Exception as _e:
+        print("[_get_read_response] flags <unprintable>:", type(_e).__name__)
+    try:
+        print("[_get_read_response] client =", repr(client))
+    except Exception as _e:
+        print("[_get_read_response] client <unprintable>:", type(_e).__name__)
+    try:
+        print("[_get_read_response] transaction_id =", repr(transaction_id))
+    except Exception as _e:
+        print("[_get_read_response] transaction_id <unprintable>:", type(_e).__name__)
+
     make_read_request = lambda: make_request(  # noqa
         command_name,
         params,
@@ -345,7 +368,7 @@ def _get_read_progress_reporter(size_hint, filename_hint, client, filelike=False
 
 # wrapper/heavy_commands.py — это общий движок для стриминговых / «тяжёлых» команд передачи данных в Python-wrapper’е, то есть для всего,
 # что прокачивает через proxy большие объёмы строк или байтов, в отличие от лёгких Cypress RPC-вызовов (get/set/list и т.п.), которые
-# находятся в cypress_commands.py и просто идут через driver.make_request.
+# находятся в cypress_ommands.py и просто идут через driver.make_request.
 
 # чтобы чтение большой таблицы было ретраебельным, код сначала создаёт транзакцию и берёт snapshot-lock на ноду
 # то фиксирует версию данных

@@ -18,6 +18,8 @@ import yt.yson as yson
 import inspect
 import os
 import re
+import sys
+import time
 import typing
 
 from copy import deepcopy
@@ -338,6 +340,7 @@ def chunk_iter(stream, response, size):
         yield stream.read(size)
 
 
+# request retrier from here?
 class RpcRequestRetrier(Retrier):
     def __init__(
         self,
@@ -369,10 +372,55 @@ class RpcRequestRetrier(Retrier):
             retry_config=retry_config,
         )
 
+    # action() — это одна попытка RPC, которую Retrier вызывает в цикле.
+    # Здесь происходит фактический спуск из Python в C++ драйвер:
+    # self.driver.execute(self.request) уходит в pybind-биндинг
+    # yt_driver_rpc_bindings.Driver::Execute, который:
+    #   1) находит дескриптор команды по request.command_name,
+    #   2) открывает/переиспользует RPC-канал до heavy proxy,
+    #   3) сериализует request.parameters в YSON и отправляет RPC,
+    #   4) сразу возвращает Response-future (НЕ блокирует).
+    #
+    # Дальнейшее поведение зависит от return_content:
+    #   * return_content=True  (мутации, мелкие чтения) — делаем response.wait(),
+    #     ждём полного ответа, проверяем is_ok(), при ошибке кидаем YtError.
+    #   * return_content=False (стримовое чтение, напр. read_table) — НЕ ждём;
+    #     байты будут литься в output_stream (BufferedStream) асинхронно,
+    #     пока Python-сторона тянет их через ResponseStream/chunk_iter.
+    #
+    # Если RPC упал ретраибельной ошибкой — поднимается исключение,
+    # Retrier ловит, дёргает except_action() (ниже), при необходимости
+    # бэкоффит и вызывает action() ещё раз. Счётчик telemetry увеличивается
+    # на КАЖДУЮ попытку, поэтому он живёт ровно здесь, в начале action().
     def action(self):
         self.telemetry.transport.requests_count += 1
 
+        print("[gearonixx] >>> driver.execute() about to dispatch RPC", file=sys.stderr)
+        print("[gearonixx]     driver:", self.driver, "type:", type(self.driver).__name__, file=sys.stderr)
+        print("[gearonixx]     request:", self.request, "type:", type(self.request).__name__, file=sys.stderr)
+        print("[gearonixx]     request.command_name:", getattr(self.request, "command_name", "<n/a>"), file=sys.stderr)
+        print("[gearonixx]     request.id:", getattr(self.request, "id", "<n/a>"), file=sys.stderr)
+        print("[gearonixx]     request.user:", getattr(self.request, "user", "<n/a>"), file=sys.stderr)
+        try:
+            print("[gearonixx]     request.parameters:", getattr(self.request, "parameters", "<n/a>"), file=sys.stderr)
+        except Exception as e:
+            print("[gearonixx]     request.parameters raised:", e, file=sys.stderr)
+        print("[gearonixx]     request attrs:", [a for a in dir(self.request) if not a.startswith("_")], file=sys.stderr)
+        print("[gearonixx]     return_content:", self.return_content, file=sys.stderr)
+        print("[gearonixx]     make_retries:", self.make_retries, file=sys.stderr)
+        print("[gearonixx]     retry_action:", self.retry_action, file=sys.stderr)
+        _t0 = time.time()
         response = self.driver.execute(self.request)
+        print("[gearonixx] <<< driver.execute() returned in {:.4f}s".format(time.time() - _t0), file=sys.stderr)
+        print("[gearonixx]     response:", response, "type:", type(response).__name__, file=sys.stderr)
+        try:
+            print("[gearonixx]     response.is_set():", response.is_set(), file=sys.stderr)
+        except Exception as e:
+            print("[gearonixx]     response.is_set() raised:", e, file=sys.stderr)
+        try:
+            print("[gearonixx]     response.is_ok():", response.is_ok() if response.is_set() else "<not-set-yet>", file=sys.stderr)
+        except Exception as e:
+            print("[gearonixx]     response.is_ok() raised:", e, file=sys.stderr)
 
         if self.return_content:
             response.wait()
@@ -502,6 +550,34 @@ def make_request(
     if get_config(client)["enable_passing_request_id_to_driver"]:
         request.id = request_params.request_id
 
+    print("[gearonixx] === RpcRequestRetrier inputs ===", file=sys.stderr)
+    print("[gearonixx] driver:", driver, "type:", type(driver).__name__, file=sys.stderr)
+    print("[gearonixx] driver dir:", [a for a in dir(driver) if not a.startswith("_")], file=sys.stderr)
+    print("[gearonixx] request:", request, "type:", type(request).__name__, file=sys.stderr)
+    print("[gearonixx] request.command_name:", getattr(request, "command_name", "<n/a>"), file=sys.stderr)
+    print("[gearonixx] request.id:", getattr(request, "id", "<n/a>"), file=sys.stderr)
+    print("[gearonixx] request.user:", getattr(request, "user", "<n/a>"), file=sys.stderr)
+
+
+    ## here @gearonixx
+    print("[gearonixx] request dir:", [a for a in dir(request) if not a.startswith("_")], file=sys.stderr)
+    print("[gearonixx] params:", repr(hide_secure_vault(params)), file=sys.stderr)
+    print("[gearonixx] input_stream:", input_stream, "type:", type(input_stream).__name__, file=sys.stderr)
+    print("[gearonixx] output_stream:", output_stream, "type:", type(output_stream).__name__, file=sys.stderr)
+    print("[gearonixx] return_content:", return_content, file=sys.stderr)
+    print("[gearonixx] allow_retries:", request_params.allow_retries, file=sys.stderr)
+    print("[gearonixx] retry_action:", request_params.get_retry_action_rpc(), file=sys.stderr)
+    print("[gearonixx] retry_config:", retry_config, file=sys.stderr)
+    print("[gearonixx] mutation_id:", mutation_id, file=sys.stderr)
+    print("[gearonixx] trace_id:", trace_id, file=sys.stderr)
+    print("[gearonixx] driver_user_name:", driver_user_name, file=sys.stderr)
+    print("[gearonixx] token set:", token is not None, file=sys.stderr)
+    print("[gearonixx] service_ticket set:", service_ticket is not None, file=sys.stderr)
+    print("[gearonixx] request_id:", request_id, file=sys.stderr)
+    print("[gearonixx] cell_id:", cell_id, file=sys.stderr)
+    print("[gearonixx] client:", client, file=sys.stderr)
+
+    _t0 = time.time()
     response = RpcRequestRetrier(
         driver=driver,
         request=request,
@@ -511,6 +587,26 @@ def make_request(
         retry_config=retry_config,
         client=client,
     ).run()
+    print("[gearonixx] === RpcRequestRetrier result ===", file=sys.stderr)
+    print("[gearonixx] elapsed: {:.4f}s".format(time.time() - _t0), file=sys.stderr)
+    print("[gearonixx] response:", response, "type:", type(response).__name__, file=sys.stderr)
+    print("[gearonixx] response dir:", [a for a in dir(response) if not a.startswith("_")], file=sys.stderr)
+    try:
+        print("[gearonixx] response.is_set():", response.is_set(), file=sys.stderr)
+    except Exception as e:
+        print("[gearonixx] response.is_set() raised:", e, file=sys.stderr)
+    try:
+        print("[gearonixx] response.is_ok():", response.is_ok(), file=sys.stderr)
+    except Exception as e:
+        print("[gearonixx] response.is_ok() raised:", e, file=sys.stderr)
+    try:
+        print("[gearonixx] response.response_parameters():", response.response_parameters(), file=sys.stderr)
+    except Exception as e:
+        print("[gearonixx] response.response_parameters() raised:", e, file=sys.stderr)
+    try:
+        print("[gearonixx] response.error():", response.error() if not response.is_ok() else "<ok>", file=sys.stderr)
+    except Exception as e:
+        print("[gearonixx] response.error() raised:", e, file=sys.stderr)
 
     if return_content:
         if output_stream is not None and not isinstance(output_stream, NullStream):
