@@ -134,44 +134,89 @@ TCheckPermissionResponse TClient::DoCheckPermission(
     EPermission permission,
     const TCheckPermissionOptions& options)
 {
+    YT_LOG_DEBUG("@@gearonixx_driver DoCheckPermission entered (User: %v, Path: %v, Permission: %v, "
+        "HasColumns: %v, HasVital: %v, SuppressTxCoordSync: %v)",
+        user,
+        path,
+        permission,
+        options.Columns.has_value(),
+        options.Vital.has_value(),
+        options.SuppressTransactionCoordinatorSync);
+
+    // Да, это синхронный RPC к мастеру. proxy.ExecuteBatch() собирает batch, batchReq->Invoke() уходит по сети в ObjectService мастера (
+    // Создаётся объект-обёртка над RPC-каналом до мастера.
     auto proxy = CreateObjectServiceReadProxy(options);
+    YT_LOG_DEBUG("@@gearonixx_driver ObjectServiceReadProxy created");
+
+    // создай мне пустой batch к этому ObjectService»
+    // Несколько запросов, упакованных в один сетевой вызов.
     auto batchReq = proxy.ExecuteBatch();
+    // Первое — флаг «не синхронизироваться с координатором транзакции перед выполнением
     batchReq->SetSuppressTransactionCoordinatorSync(options.SuppressTransactionCoordinatorSync);
     SetBalancingHeader(batchReq, options);
+    YT_LOG_DEBUG("@@gearonixx_driver batch request prepared (balancing header set, suppress-tx-coord-sync applied)");
+    // просто формат, в который ObjectService умеет принимать запросы; даже если запрос один, его всё равно нужно завернуть в batch, потому что другого API у сервиса не
 
     auto req = TObjectYPathProxy::CheckPermission(path);
     req->set_user(ToProto(user));
     req->set_permission(ToProto(permission));
+    YT_LOG_DEBUG("@@gearonixx_driver CheckPermission proto built (User: %v, Path: %v, Permission: %v)",
+        user, path, permission);
+
     if (options.Columns) {
         ToProto(req->mutable_columns()->mutable_items(), *options.Columns);
+        YT_LOG_DEBUG("@@gearonixx_driver columns attached to request (Count: %v)", options.Columns->size());
     }
     if (options.Vital) {
         req->set_vital(*options.Vital);
+        YT_LOG_DEBUG("@@gearonixx_driver vital flag attached (Vital: %v)", *options.Vital);
     }
     SetTransactionId(req, options, true);
     SetCachingHeader(req, options);
     NCypressClient::SetSuppressAccessTracking(req, true);
     NCypressClient::SetSuppressExpirationTimeoutRenewal(req, true);
     batchReq->AddRequest(req);
+    YT_LOG_DEBUG("@@gearonixx_driver request added to batch -> invoking RPC to master");
 
+    // вот здесь происходит запрос к мастеру
     auto batchRsp = WaitFor(batchReq->Invoke())
         .ValueOrThrow();
+    YT_LOG_DEBUG("@@gearonixx_driver batch RPC returned from master");
+
     auto rsp = batchRsp->GetResponse<TObjectYPathProxy::TRspCheckPermission>(0)
         .ValueOrThrow();
+    YT_LOG_DEBUG("@@gearonixx_driver extracted CheckPermission response from batch "
+        "(Action: %v, HasObjectName: %v, HasSubjectName: %v, HasColumns: %v, HasRowLevelAcl: %v)",
+        FromProto<ESecurityAction>(rsp->action()),
+        rsp->has_object_name(),
+        rsp->has_subject_name(),
+        rsp->has_columns(),
+        rsp->has_row_level_acl());
 
-    auto fillResult = [] (auto* result, const auto& protoResult) {
+    auto fillResult = [&] (auto* result, const auto& protoResult) {
         result->Action = FromProto<ESecurityAction>(protoResult.action());
         result->ObjectId = FromProto<TObjectId>(protoResult.object_id());
         result->ObjectName = protoResult.has_object_name() ? std::make_optional(protoResult.object_name()) : std::nullopt;
         result->SubjectId = FromProto<TSubjectId>(protoResult.subject_id());
         result->SubjectName = protoResult.has_subject_name() ? std::make_optional(protoResult.subject_name()) : std::nullopt;
+        YT_LOG_DEBUG("@@gearonixx_driver fillResult populated (Action: %v, ObjectId: %v, ObjectName: %v, "
+            "SubjectId: %v, SubjectName: %v)",
+            result->Action,
+            result->ObjectId,
+            result->ObjectName,
+            result->SubjectId,
+            result->SubjectName);
     };
 
     TCheckPermissionResponse response;
+    YT_LOG_DEBUG("@@gearonixx_driver building top-level response");
     fillResult(&response, *rsp);
+
     if (rsp->has_columns()) {
         response.Columns.emplace();
         response.Columns->reserve(static_cast<size_t>(rsp->columns().items_size()));
+        YT_LOG_DEBUG("@@gearonixx_driver filling per-column results (Count: %v)",
+            rsp->columns().items_size());
         for (const auto& protoResult : rsp->columns().items()) {
             fillResult(&response.Columns->emplace_back(), protoResult);
         }
@@ -179,8 +224,13 @@ TCheckPermissionResponse TClient::DoCheckPermission(
 
     if (rsp->has_row_level_acl()) {
         response.RowLevelAcl = FromProto<std::vector<TRowLevelAccessControlEntry>>(rsp->row_level_acl().items());
+        YT_LOG_DEBUG("@@gearonixx_driver row-level ACL parsed (EntryCount: %v)",
+            response.RowLevelAcl->size());
     }
 
+    YT_LOG_DEBUG("@@gearonixx_driver DoCheckPermission returning (Action: %v, ObjectId: %v)",
+        response.Action,
+        response.ObjectId);
     return response;
 }
 
@@ -191,9 +241,14 @@ TCheckPermissionResult TClient::CheckPermissionImpl(
 {
     // TODO(babenko): consider passing proper timeout
     const auto& user = Options_.GetAuthenticatedUser();
-    return DoCheckPermission(user, path, permission, options);
+    YT_LOG_DEBUG("@@gearonixx_driver CheckPermissionImpl entered (User: %v, Path: %v, Permission: %v)",
+        user, path, permission);
+    auto result = DoCheckPermission(user, path, permission, options);
+    YT_LOG_DEBUG("@@gearonixx_driver CheckPermissionImpl returning (Action: %v)", result.Action);
+    return result;
 }
 
+//         ValidatePermissionImpl(path, EPermission::Mount);
 void TClient::ValidatePermissionImpl(
     const TYPath& path,
     EPermission permission,
@@ -201,9 +256,17 @@ void TClient::ValidatePermissionImpl(
 {
     // TODO(babenko): consider passing proper timeout
     const auto& user = Options_.GetAuthenticatedUser();
-    DoCheckPermission(user, path, permission, options)
+    YT_LOG_DEBUG("@@gearonixx_driver ValidatePermissionImpl entered (User: %v, Path: %v, Permission: %v)",
+        user, path, permission);
+    auto result = DoCheckPermission(user, path, permission, options);
+    YT_LOG_DEBUG("@@gearonixx_driver ValidatePermissionImpl got result (Action: %v) -> throwing on error if denied",
+        result.Action);
+    // Allow → пустой OK-TError, Deny → TError с кодом AuthorizationError. То есть имя метода вводит в заблуждение — он не «возвращает ошибку», а «представляет результат в виде TError».
+    result
         .ToError(user, permission)
         .ThrowOnError();
+    YT_LOG_DEBUG("@@gearonixx_driver ValidatePermissionImpl passed (User: %v, Path: %v, Permission: %v)",
+        user, path, permission);
 }
 
 void TClient::MaybeValidateExternalObjectPermission(

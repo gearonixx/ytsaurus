@@ -922,36 +922,79 @@ IAttributeDictionaryPtr ResolveExternalTable(
     TCellTag* externalCellTag,
     const std::vector<std::string>& extraAttributeKeys)
 {
+    const auto& Logger = TableClientLogger();
+    YT_LOG_DEBUG("@@gearonixx_driver ResolveExternalTable entered (Path: %v, ExtraAttributeKeys: %v)",
+        path,
+        extraAttributeKeys);
+
+    // 6:11 PM
+
+    // Это создание структуры с настройками для read-запросов к мастер-серверу YT.
     TMasterReadOptions options;
+    YT_LOG_DEBUG("@@gearonixx_driver creating ObjectServiceReadProxy to primary master (ReadFrom: %v)",
+        options.ReadFrom);
+    // Object Service** — это мастер-сервис в YTsaurus, который хранит метаданные всех объектов кластера (таблицы, файлы, узлы Cypress) и отвечает на запросы чтения/записи этих метаданных.
+
+    // TObjectServiceProxy — это и есть обёртка для RPC-запросов, она просто прячет внутри себя сериализацию, выбор эндпоинта и батчинг, чтобы ты не писал этот бойлерплейт вручную каждый раз.
+    // aka create_rpc_client to master_service (in read mode)
+    // Несколько подзапросов летят одним сетевым round-trip'ом. Это сильно уменьшает нагрузку на сеть и на мастер.
+
+    // данных метаданных кластера, то Object Service — это её SQL-интерфейс. Клиент не лезет напрямую в Cypress storage, security manager или
+    // transaction manager — он шлёт типизированные запросы в Object Servic
     auto proxy = std::make_unique<TObjectServiceProxy>(CreateObjectServiceReadProxy(
         client,
         options.ReadFrom,
         PrimaryMasterCellTagSentinel,
         client->GetNativeConnection()->GetStickyGroupSizeCache()));
+    YT_LOG_DEBUG("@@gearonixx_driver proxy created");
 
     {
+        YT_LOG_DEBUG("@@gearonixx_driver step 1: GetBasicAttributes(path) -> resolve path to object_id + external_cell_tag (Path: %v)",
+            path);
         auto req = TObjectYPathProxy::GetBasicAttributes(path);
         auto rspOrError = WaitFor(proxy->Execute(req));
+        YT_LOG_DEBUG("@@gearonixx_driver GetBasicAttributes RPC returned (OK: %v)", rspOrError.IsOK());
         THROW_ERROR_EXCEPTION_IF_FAILED(rspOrError, "Error getting basic attributes of table %v", path);
         const auto& rsp = rspOrError.Value();
         *tableId = FromProto<TTableId>(rsp->object_id());
         *externalCellTag = FromProto<TCellTag>(rsp->external_cell_tag());
+        YT_LOG_DEBUG("@@gearonixx_driver GetBasicAttributes parsed (TableId: %v, ExternalCellTag: %v)",
+            *tableId,
+            *externalCellTag);
     }
 
+    YT_LOG_DEBUG("@@gearonixx_driver checking IsTabletOwnerType (TypeFromId: %v)", TypeFromId(*tableId));
     if (!IsTabletOwnerType(TypeFromId(*tableId))) {
+        YT_LOG_DEBUG("@@gearonixx_driver NOT a tablet owner -> throwing");
         THROW_ERROR_EXCEPTION("%v is not a tablet owner", path);
     }
+    YT_LOG_DEBUG("@@gearonixx_driver tablet-owner check passed");
 
     IAttributeDictionaryPtr extraAttributes;
     {
+        auto keys = extraAttributeKeys;
+        keys.push_back("dynamic");
+        YT_LOG_DEBUG("@@gearonixx_driver step 2: Get(#id/@) with attribute keys (Keys: %v)", keys);
         auto req = TTableYPathProxy::Get(FromObjectId(*tableId) + "/@");
-        ToProto(req->mutable_attributes()->mutable_keys(), extraAttributeKeys);
+        ToProto(req->mutable_attributes()->mutable_keys(), keys);
         auto rspOrError = WaitFor(proxy->Execute(req));
+        YT_LOG_DEBUG("@@gearonixx_driver Get(#id/@) RPC returned (OK: %v)", rspOrError.IsOK());
         THROW_ERROR_EXCEPTION_IF_FAILED(rspOrError, "Error getting extended attributes of table %v", path);
         const auto& rsp = rspOrError.Value();
         extraAttributes = ConvertToAttributes(TYsonString(rsp->value()));
+        YT_LOG_DEBUG("@@gearonixx_driver extraAttributes parsed from YSON");
     }
 
+    auto isDynamic = extraAttributes->Get<bool>("dynamic", false);
+    YT_LOG_DEBUG("@@gearonixx_driver dynamic flag (IsDynamic: %v)", isDynamic);
+    if (!isDynamic) {
+        YT_LOG_DEBUG("@@gearonixx_driver table is NOT dynamic -> throwing");
+        THROW_ERROR_EXCEPTION("Table %v is not dynamic", path);
+    }
+
+    YT_LOG_DEBUG("@@gearonixx_driver ResolveExternalTable returning (TableId: %v, ExternalCellTag: %v)",
+        *tableId,
+        *externalCellTag);
     return extraAttributes;
 }
 

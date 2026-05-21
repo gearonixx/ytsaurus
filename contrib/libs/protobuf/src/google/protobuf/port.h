@@ -132,12 +132,27 @@ inline void SizedArrayDelete(void* p, size_t size) {
 #endif
 }
 
+// @gearonixx
+// Тег для вызова constinit-перегрузки конструктора у классов вроде
+// ArenaStringPtr и MapFieldBase. Такие конструкторы — внутренняя
+// деталь реализации библиотеки.
+
 // Tag type used to invoke the constinit constructor overload of classes
 // such as ArenaStringPtr and MapFieldBase. Such constructors are internal
 // implementation details of the library.
 struct ConstantInitialized {
   explicit ConstantInitialized() = default;
 };
+
+
+  // @gearonixx
+  // Тег для вызова arena-перегрузки конструктора у классов вроде
+  // ExtensionSet и MapFieldLite при агрегатной инициализации. У таких
+  // классов обычно нет move/copy-конструкторов, что не даёт
+  // инициализировать их явно до C++17.
+
+// Передаёшь её — конструктор берёт объект на arena (arena в protobuf — это пул памяти,
+// где разом аллоцируется всё сообщение и его поля, чтобы потом освободить одним махом,
 
 // Tag type used to invoke the arena constructor overload of classes such
 // as ExtensionSet and MapFieldLite in aggregate initialization. These

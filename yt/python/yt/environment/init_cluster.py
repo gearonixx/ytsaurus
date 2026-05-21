@@ -496,7 +496,7 @@ def _initialize_world_for_local_cluster(client, environment, yt_config):
 
         tablet_cell_id = create_tablet_cell_id_rsp.get_result()
     else:
-        tablet_cell_id = tablet_cell_ids.keys()[0]
+        tablet_cell_id = list(tablet_cell_ids)[0]
 
     if yt_config.wait_tablet_cell_initialization or yt_config.init_operations_archive or yt_config.queue_agent_count > 0:
         logger.info("Waiting for tablet cells to become ready...")

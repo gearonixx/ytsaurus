@@ -37,9 +37,13 @@ class QueryTracker(YTServerComponentBase, YTComponent):
         else:
             self.client = env.create_client()
 
-        self.client.create("user", attributes={"name": self.USER_NAME})
+        self.client.create("user", attributes={"name": self.USER_NAME}, ignore_existing=True)
 
-        self.client.add_member(self.USER_NAME, "superusers")
+        try:
+            self.client.add_member(self.USER_NAME, "superusers")
+        except YtError as err:
+            if "is already present in group" not in str(err):
+                raise
 
         self.client.create("document", "//sys/query_tracker/config", recursive=True, force=True, attributes={"value": {}})
 
@@ -101,8 +105,8 @@ class QueryTracker(YTServerComponentBase, YTComponent):
     def init(self):
         logger.info("Initialization for query tracker started")
 
-        self.client.create("access_control_object_namespace", attributes={"name": "queries"})
-        self.client.create("access_control_object", attributes={"name": "nobody", "namespace": "queries"})
+        self.client.create("access_control_object_namespace", attributes={"name": "queries"}, ignore_existing=True)
+        self.client.create("access_control_object", attributes={"name": "nobody", "namespace": "queries"}, ignore_existing=True)
         for name in ["everyone", "everyone-share"]:
             self.client.create("access_control_object", attributes={
                 "name": name,
@@ -111,7 +115,7 @@ class QueryTracker(YTServerComponentBase, YTComponent):
                     {"action": "allow", "subjects": ["everyone"], "permissions": ["read"], "inheritance_mode": "object_and_descendants"},
                     {"action": "allow", "subjects": ["everyone"], "permissions": ["use"], "inheritance_mode": "object_and_descendants"},
                 ],
-            })
+            }, ignore_existing=True)
 
         logger.info("Initialization for query tracker completed")
 

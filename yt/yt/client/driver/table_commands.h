@@ -13,6 +13,9 @@ namespace NYT::NDriver {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `read_table` — выгружает строки статической таблицы (или ranges/columns в TRichYPath)
+// @gearonixx клиенту: открывает ITableReader через NApi, гонит чанки через указанный формат (yson/json/...)
+// @gearonixx в output stream драйвера. Поддерживает control attributes и неупорядоченное чтение.
 class TReadTableCommand
     : public TTypedCommand<NApi::TTableReaderOptions>
 {
@@ -40,6 +43,9 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `read_blob_table` — читает таблицу как один (или несколько) blob-ов:
+// @gearonixx строки сортированы по part_index, данные склеиваются из колонки DataColumnName, начиная со
+// @gearonixx StartPartIndex+Offset; используется для хранения больших файлов поверх таблиц.
 class TReadBlobTableCommand
     : public TTypedCommand<NApi::TTableReaderOptions>
 {
@@ -64,6 +70,9 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `read_table_partition` — читает одну партицию по cookie, выданному заранее
+// @gearonixx командой partition_tables; нужна для параллельного чтения большого набора таблиц
+// @gearonixx несколькими воркерами.
 class TReadTablePartitionCommand
     : public TTypedCommand<NApi::TReadTablePartitionOptions>
 {
@@ -80,6 +89,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `locate_skynet_share` — отдаёт локацию чанков таблицы для раздачи через Skynet
+// @gearonixx (внутренний P2P-CDN Яндекса); таблица должна быть в специальном sorted-blob-формате.
 class TLocateSkynetShareCommand
     : public TTypedCommand<NApi::TLocateSkynetShareOptions>
 {
@@ -96,6 +107,9 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `write_table` — пишет строки из input stream драйвера в (статическую) таблицу.
+// @gearonixx Открывает ITableWriter, конвертирует входной формат в unversioned rows, буферизует и
+// @gearonixx коммитит транзакцией; перед записью при необходимости создаёт таблицу.
 class TWriteTableCommand
     : public TTypedCommand<NApi::TTableWriterOptions>
 {
@@ -120,6 +134,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `get_table_columnar_statistics` — считает статистики по колонкам (size, weight,
+// @gearonixx data weight) набора таблиц, не читая сами данные; полезно для планировщиков map-reduce.
 class TGetTableColumnarStatisticsCommand
     : public TTypedCommand<NApi::TGetColumnarStatisticsOptions>
 {
@@ -140,6 +156,9 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `partition_tables` — режет набор таблиц на партиции по data weight или числу
+// @gearonixx партиций; при EnableCookies возвращает cookies, которые потом скармливаются
+// @gearonixx read_table_partition для параллельного чтения.
 class TPartitionTablesCommand
     : public TTypedCommand<NApi::TPartitionTablesOptions>
 {
@@ -180,6 +199,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx шаблон-база для всех команд над dynamic-таблицей, которые оперируют диапазоном tablet-ов:
+// @gearonixx даёт общий параметр Path и опции FirstTabletIndex/LastTabletIndex.
 template <class TOptions>
 class TTabletCommandBase
     : public TTypedCommand<TOptions>
@@ -211,6 +232,8 @@ protected:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `mount_table` — переводит tablets из unmounted в mounted: tablet cell поднимает
+// @gearonixx их в память и начинает обслуживать lookup/select/insert; обязательно для dynamic-таблиц.
 class TMountTableCommand
     : public TTabletCommandBase<NApi::TMountTableOptions>
 {
@@ -225,6 +248,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `unmount_table` — обратное к mount: tablet cell флашит dynamic stores на диск,
+// @gearonixx освобождает память, перестаёт обслуживать запросы. Force=true пропускает flush.
 class TUnmountTableCommand
     : public TTabletCommandBase<NApi::TUnmountTableOptions>
 {
@@ -239,6 +264,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `remount_table` — применяет новые mount-атрибуты (mount config) без полного
+// @gearonixx unmount/mount цикла; данные не сбрасываются, просто пересоздаются runtime-структуры.
 class TRemountTableCommand
     : public TTabletCommandBase<NApi::TRemountTableOptions>
 {
@@ -253,6 +280,8 @@ public:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `freeze_table` — переводит tablets в frozen-состояние (read-only, без dynamic
+// @gearonixx stores в памяти); используется как промежуточный шаг перед backup-ом или для экономии RAM.
 class TFreezeTableCommand
     : public TTabletCommandBase<NApi::TFreezeTableOptions>
 {
@@ -267,6 +296,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `unfreeze_table` — возвращает frozen tablets обратно в обычное mounted-состояние,
+// @gearonixx снова разрешая запись.
 class TUnfreezeTableCommand
     : public TTabletCommandBase<NApi::TUnfreezeTableOptions>
 {
@@ -281,6 +312,8 @@ public:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `cancel_tablet_transition` — отменяет уже стартовавший, но ещё не завершившийся
+// @gearonixx переход состояния (mount/unmount/freeze/...) одного tablet-а по его TTabletId.
 class TCancelTabletTransitionCommand
     : public TTypedCommand<NApi::TCancelTabletTransitionOptions>
 {
@@ -299,6 +332,9 @@ public:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `reshard_table` — меняет разбиение dynamic-таблицы на tablet-ы: задаётся либо
+// @gearonixx список PivotKeys (для sorted), либо TabletCount (для ordered); таблица должна быть
+// @gearonixx unmounted на затрагиваемом диапазоне.
 class TReshardTableCommand
     : public TTabletCommandBase<NApi::TReshardTableOptions>
 {
@@ -316,6 +352,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `reshard_table_automatic` — просит мастер автоматически пересчитать pivot keys
+// @gearonixx по статистикам chunks и выполнить reshard; ручные PivotKeys/TabletCount не нужны.
 class TReshardTableAutomaticCommand
     : public TTabletCommandBase<NApi::TReshardTableAutomaticOptions>
 {
@@ -330,6 +368,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `alter_table` — меняет атрибуты таблицы: schema, dynamic↔static, upstream_replica_id,
+// @gearonixx schema_modification и т.п. Не трогает данные, только метаданные на мастере.
 class TAlterTableCommand
     : public TTypedCommand<NApi::TAlterTableOptions>
 {
@@ -351,6 +391,9 @@ struct TSelectRowsOptions
     , public TTabletTransactionOptions
 { };
 
+// @gearonixx команда `select_rows` — выполняет SQL-подобный запрос (YT-QL) по dynamic-таблицам;
+// @gearonixx сервер разбирает Query, строит план, опрашивает tablet cells параллельно и стримит
+// @gearonixx результат клиенту.
 class TSelectRowsCommand
     : public TTypedCommand<TSelectRowsOptions>
 {
@@ -375,6 +418,8 @@ struct TExplainQueryOptions
     , public TTabletTransactionOptions
 { };
 
+// @gearonixx команда `explain_query` — возвращает план запроса YT-QL без его выполнения;
+// @gearonixx используется для отладки производительности select_rows.
 class TExplainQueryCommand
     : public TTypedCommand<TExplainQueryOptions>
 {
@@ -391,6 +436,9 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `insert_rows` — пишет строки в dynamic-таблицу в рамках tablet-транзакции;
+// @gearonixx Update=true делает merge по ключу вместо overwrite, Aggregate включает aggregate-колонки,
+// @gearonixx LockType задаёт тип блокировки (shared/exclusive/...).
 class TInsertRowsCommand
     : public TTypedCommand<TInsertRowsOptions>
 {
@@ -416,6 +464,9 @@ struct TLookupRowsOptions
     , public TTabletTransactionOptions
 { };
 
+// @gearonixx команда `lookup_rows` — точечная выборка строк sorted dynamic-таблицы по полному ключу;
+// @gearonixx быстрее select для key-based доступа. Versioned=true возвращает все версии (с timestamps),
+// @gearonixx RetentionConfig ограничивает сколько именно версий вернуть.
 class TLookupRowsCommand
     : public TTypedCommand<TLookupRowsOptions>
 {
@@ -441,6 +492,8 @@ struct TPullRowsOptions
     : public NApi::TPullRowsOptions
 { };
 
+// @gearonixx команда `pull_rows` — забирает поток изменений (changelog) реплицируемой таблицы начиная
+// @gearonixx с указанного timestamp/row-index; используется replicator-ом для асинхронной репликации.
 class TPullRowsCommand
     : public TTypedCommand<TPullRowsOptions>
 {
@@ -458,6 +511,9 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `get_in_sync_replicas` — для replicated-таблицы возвращает список реплик,
+// @gearonixx синхронных на конкретные ключи (или на все, при AllKeys=true) на момент TS; нужна, чтобы
+// @gearonixx клиент мог сделать консистентный lookup из реплики.
 class TGetInSyncReplicasCommand
     : public TTypedCommand<NApi::TGetInSyncReplicasOptions>
 {
@@ -475,6 +531,7 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `delete_rows` — удаляет строки dynamic-таблицы по ключам в рамках tablet-транзакции.
 class TDeleteRowsCommand
     : public TTypedCommand<TDeleteRowsOptions>
 {
@@ -492,6 +549,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `lock_rows` — берёт row-level блокировки указанных типов на ключах без записи
+// @gearonixx данных; используется для координации параллельных транзакций над одной строкой.
 class TLockRowsCommand
     : public TTypedCommand<TLockRowsOptions>
 {
@@ -511,6 +570,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `trim_rows` — для ordered dynamic-таблицы обрезает начало конкретного tablet-а
+// @gearonixx до TrimmedRowCount; используется для TTL-подобной чистки очередей.
 class TTrimRowsCommand
     : public TTypedCommand<NApi::TTrimTableOptions>
 {
@@ -529,6 +590,7 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `enable_table_replica` — включает реплику replicated-таблицы по её ReplicaId.
 class TEnableTableReplicaCommand
     : public TTypedCommand<NApi::TAlterTableReplicaOptions>
 {
@@ -545,6 +607,7 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `disable_table_replica` — выключает реплику replicated-таблицы.
 class TDisableTableReplicaCommand
     : public TTypedCommand<NApi::TAlterTableReplicaOptions>
 {
@@ -561,6 +624,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `alter_table_replica` — меняет произвольные атрибуты реплики (mode sync/async,
+// @gearonixx enabled, preserve_timestamps, atomicity и т.п.).
 class TAlterTableReplicaCommand
     : public TTypedCommand<NApi::TAlterTableReplicaOptions>
 {
@@ -577,6 +642,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `get_tablet_infos` — возвращает рантайм-информацию по указанным tablet-ам
+// @gearonixx (total_row_count, trimmed_row_count, последние записанные TS, replication progress).
 class TGetTabletInfosCommand
     : public TTypedCommand<NApi::TGetTabletInfosOptions>
 {
@@ -594,6 +661,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `get_tablet_errors` — собирает ошибки tablet-ов таблицы (background flush/compaction,
+// @gearonixx replication errors); используется в мониторинге health-а.
 class TGetTabletErrorsCommand
     : public TTypedCommand<NApi::TGetTabletErrorsOptions>
 {
@@ -610,6 +679,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `get_table_pivot_keys` — возвращает список pivot keys таблицы (границы tablet-ов);
+// @gearonixx нужна для построения параллельного reader-а / sanity-чек reshard-а.
 class TGetTablePivotKeysCommand
     : public TTypedCommand<NApi::TGetTablePivotKeysOptions>
 {
@@ -626,6 +697,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `create_table_backup` — создаёт consistent backup по манифесту (набор пар
+// @gearonixx source→destination таблиц); атомарно фризит источники, делает дешёвый copy метаданных.
 class TCreateTableBackupCommand
     : public TTypedCommand<NApi::TCreateTableBackupOptions>
 {
@@ -642,6 +715,8 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+// @gearonixx команда `restore_table_backup` — обратная к create_table_backup: восстанавливает таблицы
+// @gearonixx из backup-копий, описанных манифестом.
 class TRestoreTableBackupCommand
     : public TTypedCommand<NApi::TRestoreTableBackupOptions>
 {
@@ -661,6 +736,9 @@ private:
 struct TGetTableMountInfoCommandOptions
 { };
 
+// @gearonixx команда `get_table_mount_info` — отдаёт клиенту mount-info таблицы: список tablet-ов,
+// @gearonixx их cell-id, peers, schema; клиентская библиотека по этой инфе ходит напрямую в tablet
+// @gearonixx cells, минуя rpc-proxy.
 class TGetTableMountInfoCommand
     : public TTypedCommand<TGetTableMountInfoCommandOptions>
 {

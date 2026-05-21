@@ -71,6 +71,10 @@ rm -rf ./*  # сносим только содержимое /tmp/yt_local/*, н
 #       (см. 10-test-table-rpc.sh). Ставим 1, чтобы и HTTP, и RPC backend работали.
 echo
 echo "=== yt_local start (Ctrl+C для остановки) ==="
+# EXTRA_YT_LOCAL_ARGS — точка расширения для опциональных компонентов
+# (например, --component '{name=query_tracker}'). По умолчанию пусто →
+# минимальный кластер. См. ./up, который выставляет это для QT.
+# shellcheck disable=SC2086
 exec yt_local start \
     --enable-debug-logging \
     --enable-structured-logging \
@@ -78,6 +82,7 @@ exec yt_local start \
     --fqdn "$FQDN" \
     --rpc-proxy-count "$RPC_PROXY_COUNT" \
     --ytserver-all-path "$YTSERVER_ALL" \
+    $EXTRA_YT_LOCAL_ARGS \
     --sync
 
 # После старта смотри лог в этом же терминале (он будет показывать INFO-сообщения),

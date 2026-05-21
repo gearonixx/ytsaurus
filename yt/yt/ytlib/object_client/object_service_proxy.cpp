@@ -1265,7 +1265,9 @@ void ThrowCumulativeErrorIfFailed(const TObjectServiceProxy::TErrorOrRspExecuteB
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
+///
+///
+/// Object Client — это библиотека, которую линкуют в любой клиент YT (driver, server-компоненты, утилиты) чтобы тот мог общаться с мастером.
 TObjectServiceProxy CreateObjectServiceReadProxy(
     IClientPtr client,
     NApi::EMasterChannelKind readFrom,

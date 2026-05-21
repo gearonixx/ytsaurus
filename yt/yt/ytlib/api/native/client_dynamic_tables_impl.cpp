@@ -2179,38 +2179,93 @@ auto TClient::CallAndRetryIfMetadataCacheIsInconsistent(
     }
 }
 
+// Внутри он делает три вещи: резолвит путь в tableId + находит native/external master-cells; стартует системную master-транзакцию;
+// прицепляет req как transaction action к этим cells и коммитит через 2PC.
+
+// ExecuteTabletServiceRequest — общая обёртка, через которую идут все запросы к таблет-сервису: Mount, Unmount, Remount,
+// Freeze, Unfreeze, Reshard. Все они требуют тех же двух прав (Use на бандл + что-то на таблицу), поэтому проверку
+// засунули в одно место — иначе пришлось бы копипастить в каждый DoMountTable/DoFreezeTable и т.п.
+
+
+// IClient — это интерфейс главного клиента YT, через который выполняются практически все операции с кластером. Это твоя основная "точка входа" в YT из C++.
+
 template <class TReq>
 void TClient::ExecuteTabletServiceRequest(
+    // path
     const TYPath& path,
+    // Freezing
     TStringBuf action,
+    // the proto req
     TReq* req)
 {
+    YT_LOG_DEBUG("@@gearonixx_driver ExecuteTabletServiceRequest entered (Path: %v, Action: %v)",
+        path,
+        action);
+
     TTableId tableId;
+    // TCellTag — короткий номер мастер-сервера. externalCellTag говорит, на каком именно мастере лежат данные таблицы.
+    // В кластере один primary master и несколько secondary (по одному TCellTag на каждого) — объекты шардируются между ними, чтобы один мастер не держал весь Cypress.
     TCellTag externalCellTag;
+    //  Хелпер из yt/yt/ytlib/table_client/helpers.cpp:918. Делает два RPC к primary master через TObjectServiceProxy: первый — GetBasicAttributes(path) → достаёт object_id и external_cell_tag; затем проверяет, что
+    // это tablet owner (динамическая таблица); второй — Get("#id/@", keys=...) → тянет запрошенные атрибуты по id (а не по пути, чтобы не зарезолвить заново).
     auto tableAttributes = NTableClient::ResolveExternalTable(
         MakeStrong(this),
         path,
         &tableId,
         &externalCellTag,
         {"tablet_cell_bundle", "path"});
+    YT_LOG_DEBUG("@@gearonixx_driver ResolveExternalTable returned (TableId: %v, ExternalCellTag: %v)",
+        tableId,
+        externalCellTag);
 
+    //  «Tablet owner» — объект, у которого есть таблеты: динамическая таблица (sorted/ordered) и replicated table.
+    //  Да, именно динамическая таблица и есть tablet owner — она «владеет» своими таблетами (шардами строк). Статическая таблица таблетов не имеет, поэтому она не tablet owner.
+    // Все вызовы — из контекста динамических таблиц (backup, dynamic tables, replicated replica, pivot keys), так что добавить проверку безопасно.
     if (!IsTabletOwnerType(TypeFromId(tableId))) {
         THROW_ERROR_EXCEPTION("Object %v is not a tablet owner", path);
     }
+    YT_LOG_DEBUG("@@gearonixx_driver tablet-owner type check passed (TypeFromId: %v)",
+        TypeFromId(tableId));
 
+    // Sequoia — это новая архитектура хранения метаданных Cypress в YT: вместо одного мастера дерево объектов шардируется по динамическим таблицам, чтобы масштабироваться за пределы одного мастер-сервера.
+    // IsSequoiaId определяет, что объект (тут — таблица) живёт в Sequoia-ветке, а не на классическом мастере.
+
+    // Обычно метаданные всех таблиц/папок YT хранит один мастер-сервер — и он упирается в лимит.
+    // Sequoia распиливает это дерево на куски и раскладывает по динамическим таблицам, чтобы нагрузку держали много
+    // серверов. IsSequoiaId просто проверяет: эта таблица лежит в новой системе или в старой на мастере.
+
+    // Если таблица живёт в Sequoia (новой системе метаданных), то стандартная проверка прав на маунт через мастер не отрабатывает —
+    // поэтому здесь её делают вручную: достают имя бандла таблицы и проверяют, что у
+    // юзера есть право Use на этот бандл и право Mount на саму таблицу. Если хоть одного нет — кидается исключение и маунт не пойдёт.
+
+    YT_LOG_DEBUG("@@gearonixx_driver IsSequoiaId check (TableId: %v, IsSequoia: %v)",
+        tableId,
+        IsSequoiaId(tableId));
     if (IsSequoiaId(tableId)) {
         // COMPAT(h0pless): This is a quick and dirty fix for dynamic tables in Sequoia in 25.4.
+        // знать, к какому бандлу привязана
+        // таблица
+        // ● ACL (Access Control List) — список правил доступа на объект: кому (юзеру/группе) что разрешено или запрещено делать (читать, писать, монтировать, администрировать и т.п.). В YT это массив записей вида
+        // «subject + permissions + action (allow/deny)», а inherit_acl говорит, наследовать ли правила от родительской ноды в Cypres
+        // три бита (rwx) для владельца, группы и остальных. ACL в YT гибче: можно перечислить произвольных пользователей и группы, дать им
+        // разные наборы прав (Read, Write, Mount, Administer, Use…), явно запретить (deny) и наследовать правила сверху по дереву Cypress. Ближе к ACL в NTFS/POSIX ACL, чем к классическим chmod-битам.
+        // Bundle (tablet cell bundle) — это именованная группа таблет-селлов (tablet cells), на которых крутятся динамические таблицы. Таблет-селл — это процесс/контейнер на tablet-ноде,
         auto bundle = tableAttributes->Get<std::string>("tablet_cell_bundle");
+        YT_LOG_DEBUG("@@gearonixx_driver Sequoia path: validating permissions (Bundle: %v)",
+            bundle);
         ValidatePermissionImpl("//sys/tablet_cell_bundles/" + ToYPathLiteral(bundle), EPermission::Use);
         ValidatePermissionImpl(path, EPermission::Mount);
     }
 
     auto nativeCellTag = CellTagFromId(tableId);
+    YT_LOG_DEBUG("@@gearonixx_driver computed nativeCellTag (NativeCellTag: %v)",
+        nativeCellTag);
 
     auto transactionAttributes = CreateEphemeralAttributes();
-    transactionAttributes->Set(
-        "title",
-        Format("%v node %v", action, path));
+    auto txTitle = Format("%v node %v", action, path);
+    transactionAttributes->Set("title", txTitle);
+    YT_LOG_DEBUG("@@gearonixx_driver built transaction attributes (Title: %v)",
+        txTitle);
 
     TTransactionStartOptions transactionOptions;
     transactionOptions.Attributes = std::move(transactionAttributes);
@@ -2218,25 +2273,55 @@ void TClient::ExecuteTabletServiceRequest(
     transactionOptions.CoordinatorMasterCellTag = nativeCellTag;
     transactionOptions.ReplicateToMasterCellTags = TCellTagList{externalCellTag};
     transactionOptions.StartCypressTransaction = false;
+    YT_LOG_DEBUG("@@gearonixx_driver TTransactionStartOptions built "
+        "(CoordinatorMasterCellTag: %v, ReplicateToMasterCellTags: %v, StartCypressTransaction: %v, SuppressStartTimestampGeneration: %v)",
+        transactionOptions.CoordinatorMasterCellTag,
+        transactionOptions.ReplicateToMasterCellTags,
+        transactionOptions.StartCypressTransaction,
+        transactionOptions.SuppressStartTimestampGeneration);
+
     auto asyncTransaction = StartNativeTransaction(
         NTransactionClient::ETransactionType::Master,
         transactionOptions);
     auto transaction = WaitFor(asyncTransaction)
         .ValueOrThrow();
+    YT_LOG_DEBUG("@@gearonixx_driver native master transaction started (TransactionId: %v)",
+        transaction->GetId());
 
     ToProto(req->mutable_table_id(), tableId);
+    YT_LOG_DEBUG("@@gearonixx_driver req.table_id set (TableId: %v)",
+        tableId);
 
     auto fullPath = tableAttributes->Get<TString>("path");
     SetDynamicTableCypressRequestFullPath(req, fullPath);
+    YT_LOG_DEBUG("@@gearonixx_driver req full path set (FullPath: %v)",
+        fullPath);
 
     auto actionData = MakeTransactionActionData(*req);
+    YT_LOG_DEBUG("@@gearonixx_driver actionData built (Type: %v, ValueSize: %v)",
+        actionData.Type,
+        actionData.Value.size());
 
     auto nativeCellId = GetNativeConnection()->GetMasterCellId(nativeCellTag);
     auto externalCellId = GetNativeConnection()->GetMasterCellId(externalCellTag);
+    YT_LOG_DEBUG("@@gearonixx_driver resolved cell ids (NativeCellId: %v, ExternalCellId: %v)",
+        nativeCellId,
+        externalCellId);
+
     transaction->AddAction(nativeCellId, actionData);
+    YT_LOG_DEBUG("@@gearonixx_driver added action to native cell (NativeCellId: %v)",
+        nativeCellId);
     if (nativeCellId != externalCellId) {
         transaction->AddAction(externalCellId, actionData);
+        YT_LOG_DEBUG("@@gearonixx_driver added action to external cell (ExternalCellId: %v)",
+            externalCellId);
     }
+
+    YT_LOG_DEBUG("@@gearonixx_driver committing transaction "
+        "(TransactionId: %v, Force2PC: %v, CoordinatorCommitMode: Lazy, CellIdsToSyncWithBeforePrepare: %v)",
+        transaction->GetId(),
+        true,
+        std::vector<TCellId>{nativeCellId});
 
     WaitFor(transaction->Commit(TTransactionCommitOptions{
         .Force2PC = true,
@@ -2244,6 +2329,11 @@ void TClient::ExecuteTabletServiceRequest(
         .CellIdsToSyncWithBeforePrepare = {nativeCellId}
     }))
         .ThrowOnError();
+
+    YT_LOG_DEBUG("@@gearonixx_driver transaction committed OK (TransactionId: %v, Path: %v, Action: %v)",
+        transaction->GetId(),
+        path,
+        action);
 }
 
 void TClient::DoMountTable(
@@ -2307,6 +2397,20 @@ void TClient::DoFreezeTable(
     const TYPath& path,
     const TFreezeTableOptions& options)
 {
+    YT_LOG_DEBUG("@@gearonixx_driver native::TClient::DoFreezeTable entered "
+        "(Path: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+        path,
+        // @gearonixx
+        // это диапозон таблетов
+        options.FirstTabletIndex,
+        options.LastTabletIndex);
+
+    // freeze dynamic request
+
+  //   ● TReqFreeze — это protobuf-сообщение, описанное в .proto файле tablet service; такие классы автогенерируются для каждого RPC-метода и нужны, чтобы клиент и сервер могли сериализовать/десериализовать
+  // параметры вызова в единый бинарный формат и передавать их по сети.
+    // По RPC — protobuf это только формат сериализации тела запроса. YT-RPC оборачивает сериализованный TReqFreeze в свой сетевой протокол (поверх Bus/TCP) с заголовками, типом метода, mutation id
+
     NTabletClient::NProto::TReqFreeze req;
     if (options.FirstTabletIndex) {
         req.set_first_tablet_index(*options.FirstTabletIndex);
@@ -2315,13 +2419,29 @@ void TClient::DoFreezeTable(
         req.set_last_tablet_index(*options.LastTabletIndex);
     }
 
+    //ь: TReqMount существует не в твоём коде, а в .proto-файле. То, что ты видишь в .cpp, — это сгенерированный класс. TMountTableOptions (твоя обычная C++ структура) и TReqMount (proto) — разные вещи; код копирует поля из одного в другое именно потому, что в сеть полетит только proto.
+    YT_LOG_DEBUG("@@gearonixx_driver native::TClient::DoFreezeTable TReqFreeze built "
+        "(HasFirstTabletIndex: %v, HasLastTabletIndex: %v) -> calling ExecuteTabletServiceRequest(\"Freezing\")",
+        req.has_first_tablet_index(),
+        req.has_last_tablet_index());
+
+    // RPC-запрос req (FreezeTablets) на tablet service для таблицы path, а строка "Freezing" — это просто человекочитаемый лейбл операции для
+    // логов и сообщений об ошибках.
     ExecuteTabletServiceRequest(path, "Freezing", &req);
+    YT_LOG_DEBUG("@@gearonixx_driver native::TClient::DoFreezeTable ExecuteTabletServiceRequest returned OK (Path: %v)",
+        path);
 }
 
 void TClient::DoUnfreezeTable(
     const TYPath& path,
     const TUnfreezeTableOptions& options)
 {
+    YT_LOG_DEBUG("@@gearonixx_driver native::TClient::DoUnfreezeTable entered "
+        "(Path: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+        path,
+        options.FirstTabletIndex,
+        options.LastTabletIndex);
+
     NTabletClient::NProto::TReqUnfreeze req;
 
     if (options.FirstTabletIndex) {
@@ -2330,8 +2450,14 @@ void TClient::DoUnfreezeTable(
     if (options.LastTabletIndex) {
         req.set_last_tablet_index(*options.LastTabletIndex);
     }
+    YT_LOG_DEBUG("@@gearonixx_driver native::TClient::DoUnfreezeTable TReqUnfreeze built "
+        "(HasFirstTabletIndex: %v, HasLastTabletIndex: %v) -> calling ExecuteTabletServiceRequest(\"Unfreezing\")",
+        req.has_first_tablet_index(),
+        req.has_last_tablet_index());
 
     ExecuteTabletServiceRequest(path, "Unfreezing", &req);
+    YT_LOG_DEBUG("@@gearonixx_driver native::TClient::DoUnfreezeTable ExecuteTabletServiceRequest returned OK (Path: %v)",
+        path);
 }
 
 void TClient::DoCancelTabletTransition(

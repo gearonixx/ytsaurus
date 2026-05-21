@@ -63,9 +63,12 @@ echo "=== 3. Запускаем install_locally.sh ==="
 # делаем это явно — чтобы при дебаге не возникало вопросов «откуда там
 # /workspace».
 BUILD_DIR="$REPO_ROOT/yt/python/packages/ytsaurus-client-trunk-dev/build"
-if [ -d "$BUILD_DIR" ]; then
-    rm -rf "$BUILD_DIR"
-fi
+# Чистим СОДЕРЖИМОЕ, но сохраняем сам каталог: install_locally.sh внутри делает
+# `mv ./* .../build/` без mkdir -p, и если удалить директорию целиком, mv упадёт
+# с "No such file or directory" — editable-инсталл ytsaurus-client не произойдёт,
+# `import yt` сломается.
+mkdir -p "$BUILD_DIR"
+rm -rf "$BUILD_DIR"/* "$BUILD_DIR"/.[!.]*
 cd "$REPO_ROOT/yt/python/packages/ytsaurus-client-trunk-dev/"
 ./install_locally.sh
 
@@ -105,7 +108,9 @@ echo "=== 7. Sanity check editable-инсталла ==="
 # build-каталога (или симлинки оттуда на репо).
 EXPECTED_PREFIX="$REPO_ROOT/yt/python"
 for mod in yt.local yt.wrapper yt.environment; do
-    path="$(python -c "import $mod, os; print(os.path.realpath($mod.__file__))" 2>&1 || true)"
+    # yt-пакет печатает баннер `[gearonixx] YT_CONFIG_PATCHES not set` на импорте
+    # (наш патч в yt/wrapper). Берём только последнюю строку stdout — собственно путь.
+    path="$(python -c "import $mod, os; print(os.path.realpath($mod.__file__))" 2>/dev/null | tail -1 || true)"
     case "$path" in
         "$EXPECTED_PREFIX"/*)
             echo "  ok   $mod -> $path"

@@ -57,6 +57,7 @@ using TSecurityTag = TString;
 constexpr int MaxSecurityTagLength = 128;
 
 DEFINE_ENUM(ESecurityAction,
+    //  Пока он ничего не нашёл, у него в голове состояние «ХЗ, ещё не решил» — это и есть Undefined
     ((Undefined)(0))  // Intermediate state, used internally.
     ((Allow)    (1))  // Let'em go!
     ((Deny)     (2))  // No way!

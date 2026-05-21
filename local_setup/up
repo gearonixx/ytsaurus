@@ -1,13 +1,35 @@
 #!/usr/bin/env bash
-# Один вход: venv → sysctl → бинарь → старт кластера.
-# Покрывает рутинную последовательность: source venv, 04-copy-binary, 05-start-cluster.
-# 02-prepare-host вызывается только если overcommit_memory сбросился (после ребута).
-# 01/03 — одноразовые, дёргать их здесь не надо.
+# Один вход: полная пересборка локального окружения с нуля + Query Tracker.
+#   08-stop-all        — снести предыдущие кластер+UI и почистить /tmp/yt_local
+#   04-copy-binary     — свежий ytserver-all из контейнера ytsaurus-dev
+#   05-start-cluster   — поднять YT-кластер (в фоне, --sync) + Query Tracker
+#                        (передаём в 05 через EXTRA_YT_LOCAL_ARGS)
+#   06-start-ui        — поднять UI в docker (после того как http_proxy ответил)
+#   11-test-dyn-table-rpc — smoke-тест динамической таблицы через RPC
+#
+# Про Query Tracker:
+#   yt_local поддерживает компоненты через флаг `--component`
+#   (см. yt/python/yt/local/commands.py:118 run_components).
+#   QueryTracker-компонент (yt/python/yt/environment/components/query_tracker/)
+#   автоматически:
+#     * запускает ytserver-query-tracker рядом с кластером
+#     * инициализирует dyn-таблицы //sys/query_tracker/{active,finished_queries,...}
+#     * регистрирует стейджи `production` и `testing` в
+#       //sys/@cluster_connection/query_tracker
+#       (без этого UI выдаёт "Query tracker stage 'testing' is not found")
+#     * создаёт ACO-объекты queries/{nobody, everyone, everyone-share}
+#   Тяжелее на ~30с старта и один лишний субпроцесс — взамен работает UI Queries.
+#
+# 02 (overcommit) — вызывается только если оно сброшено (после ребута).
+# 01/03 — одноразовые (контейнер + venv), здесь не дёргаются.
+#
+# Кластер остаётся жить на foreground'е этого скрипта: Ctrl+C → trap → stop всего.
 
 set -e
 
 VENV="${VENV:-$HOME/yt-venv}"
 YTSERVER_ALL="${YTSERVER_ALL:-/tmp/ytserver-all}"
+PROXY_PORT="${PROXY_PORT:-8000}"
 
 cd "$(dirname "$0")"
 
@@ -16,13 +38,120 @@ cd "$(dirname "$0")"
 source "$VENV/bin/activate"
 
 if [ "$(cat /proc/sys/vm/overcommit_memory)" != "1" ]; then
-    echo "=== vm.overcommit_memory != 1 — прогоняю 02-prepare-host.sh ==="
+    echo "=== [up] vm.overcommit_memory != 1 — прогоняю 02-prepare-host.sh ==="
     ./02-prepare-host.sh
 fi
 
-if [ ! -x "$YTSERVER_ALL" ]; then
-    echo "=== Нет $YTSERVER_ALL — забираю бинарь из контейнера ==="
-    ./04-copy-binary.sh
+# 1. Чистый стоп всего предыдущего. На вопрос про /tmp/yt_local отвечаем "y"
+#    (логи на --enable-debug-logging улетают в сотни МБ за минуты — старое не жалко).
+echo
+echo "=== [up] 08-stop-all (clean) ==="
+yes y | ./08-stop-all.sh || true
+
+# 2. Свежий бинарь. После шага 1 /tmp/ytserver-all удалён → всегда копируем заново.
+echo
+echo "=== [up] 04-copy-binary ==="
+./04-copy-binary.sh
+
+# Sanity-check: editable-инсталл должен видеть QueryTracker. Если сломано —
+# падаем здесь с понятным сообщением, а не через минуту в run_components.
+"$VENV/bin/python" -c "from yt.environment.components.query_tracker import QueryTracker" 2>/dev/null \
+    || { echo "[up] QueryTracker недоступен. Перезапусти 03-install-host-python.sh"; exit 1; }
+# ytserver-all multicall должен содержать программу ytserver-query-tracker.
+if ! "$YTSERVER_ALL" --help 2>&1 | grep -q "^  ytserver-query-tracker$"; then
+    echo "[up] $YTSERVER_ALL не содержит ytserver-query-tracker (слишком старый бинарь)"
+    exit 1
 fi
 
-exec ./05-start-cluster.sh
+# 3. Стартуем кластер в фоне. 05 уже зовёт `yt_local start --sync`, который держит
+#    терминал — пускаем его в бэкграунд этого скрипта и ждём, пока http_proxy
+#    реально ответит на :8000. EXTRA_YT_LOCAL_ARGS добавляет компонент QT.
+echo
+echo "=== [up] 05-start-cluster + query_tracker (background) ==="
+EXTRA_YT_LOCAL_ARGS="--component {name=query_tracker}" ./05-start-cluster.sh &
+CLUSTER_PID=$!
+
+# Чтобы Ctrl+C / падение up не оставило висеть кластер и UI.
+cleanup() {
+    trap - EXIT INT TERM
+    echo
+    echo "=== [up] cleanup: останавливаю кластер (pid $CLUSTER_PID) и UI ==="
+    docker rm -f yt-ui >/dev/null 2>&1 || true
+    if kill -0 "$CLUSTER_PID" 2>/dev/null; then
+        kill -INT "$CLUSTER_PID" 2>/dev/null || true
+        wait "$CLUSTER_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+# Ждём, пока http_proxy реально начнёт обслуживать API. yt_local --sync
+# возвращает control только после healthcheck'а, но он бежит в фоне — нам нужно
+# увидеть это снаружи. Дёргаем `yt exists /` через CLI: дёшево и проверяет полный
+# путь до HTTP-прокси, а не просто TCP-accept.
+echo -n "=== [up] жду http_proxy на :$PROXY_PORT "
+ready=0
+for i in $(seq 1 180); do
+    if YT_PROXY="localhost:$PROXY_PORT" yt exists / >/dev/null 2>&1; then
+        echo " — ok (${i}s)"
+        ready=1
+        break
+    fi
+    if ! kill -0 "$CLUSTER_PID" 2>/dev/null; then
+        echo
+        echo "[up] кластер упал на старте. Лог: /tmp/yt_local/*/logs/"
+        exit 1
+    fi
+    echo -n "."
+    sleep 1
+done
+if [ "$ready" != "1" ]; then
+    echo
+    echo "[up] http_proxy не поднялся за 180с. Лог: /tmp/yt_local/*/logs/http-proxy-0.log"
+    exit 1
+fi
+
+# Ждём, пока QueryTracker допишет //sys/@cluster_connection/query_tracker — это
+# происходит уже после environment.start(), внутри run_components, поэтому
+# `yt exists /` успевает ответить раньше. UI без этой ноды отдаёт
+# "Query tracker stage 'testing' is not found".
+echo -n "=== [up] жду регистрацию query_tracker "
+qt_ready=0
+for i in $(seq 1 180); do
+    if YT_PROXY="localhost:$PROXY_PORT" yt exists //sys/@cluster_connection/query_tracker/stages/testing 2>/dev/null \
+        | tail -1 | grep -q true; then
+        echo " — ok (${i}s)"
+        qt_ready=1
+        break
+    fi
+    if ! kill -0 "$CLUSTER_PID" 2>/dev/null; then
+        echo
+        echo "[up] кластер упал во время инициализации QT."
+        echo "Лог: /tmp/yt_local/*/logs/query-tracker-0.log"
+        exit 1
+    fi
+    echo -n "."
+    sleep 1
+done
+if [ "$qt_ready" != "1" ]; then
+    echo
+    echo "[up] query_tracker не зарегистрировался за 180с."
+    echo "Лог: /tmp/yt_local/*/logs/query-tracker-0.log"
+    exit 1
+fi
+
+# 4. UI
+echo
+echo "=== [up] 06-start-ui ==="
+./06-start-ui.sh
+
+# 5. Smoke-тест: создаём dyn-таблицу через RPC, mount, insert-rows, select-rows.
+echo
+echo "=== [up] 11-test-dyn-table-rpc ==="
+./11-test-dyn-table-rpc.sh
+
+echo
+echo "=== [up] всё поднято. UI: http://localhost/  Proxy: localhost:$PROXY_PORT ==="
+echo "Кластер крутится в фоне (pid $CLUSTER_PID). Ctrl+C здесь — остановит всё."
+
+# Удерживаем foreground на процессе кластера, чтобы Ctrl+C дошёл до trap.
+wait "$CLUSTER_PID"

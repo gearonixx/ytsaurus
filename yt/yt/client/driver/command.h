@@ -92,6 +92,9 @@ public:
     void Execute(ICommandContextPtr context) override;
 };
 
+// Базовый класс для команд, у которых опции имеют конкретный тип. `<TOptions>` —
+// это какой именно: для freeze это `TFreezeTableOptions`, для mount — `TMountTableOptions`.
+// Без шаблона пришлось бы хранить опции как «что-то непонятное» и кастить.
 template <class TOptions>
 class TTypedCommandBase
     : public TCommandBase

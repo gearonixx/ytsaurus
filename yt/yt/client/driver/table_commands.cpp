@@ -677,26 +677,78 @@ void TRemountTableCommand::DoExecute(ICommandContextPtr context)
 
 void TFreezeTableCommand::DoExecute(ICommandContextPtr context)
 {
+    // mutation_id: b1b94c75-bf5510c2-bee3cdd-ae7b768b
+    YT_LOG_DEBUG("@@gearonixx_driver Executing \"freeze_table\" command "
+        "(Path: %v, FirstTabletIndex: %v, LastTabletIndex: %v, "
+        "Timeout: %v, MutationId: %v, Retry: %v)",
+        Path.GetPath(),
+        Options.FirstTabletIndex,
+        Options.LastTabletIndex,
+        Options.Timeout,
+        Options.MutationId,
+        // retry: false
+        Options.Retry);
+
+    // oh so it get's a client via the IC
     auto asyncResult = context->GetClient()->FreezeTable(
         Path.GetPath(),
         Options);
+    YT_LOG_DEBUG("@@gearonixx_driver freeze_table: client->FreezeTable dispatched, awaiting future "
+        "(Path: %v, IsSet: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+        Path.GetPath(),
+        // промис е
+        asyncResult.IsSet(),
+        Options.FirstTabletIndex,
+        Options.LastTabletIndex);
+
     WaitFor(asyncResult)
         .ThrowOnError();
+    YT_LOG_DEBUG("@@gearonixx_driver freeze_table: client->FreezeTable completed OK "
+        "(Path: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+        Path.GetPath(),
+        Options.FirstTabletIndex,
+        Options.LastTabletIndex);
 
     ProduceEmptyOutput(context);
+    YT_LOG_DEBUG("@@gearonixx_driver freeze_table: empty output produced, command done (Path: %v)",
+        Path.GetPath());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void TUnfreezeTableCommand::DoExecute(ICommandContextPtr context)
 {
+    YT_LOG_DEBUG("@@gearonixx_driver Executing \"unfreeze_table\" command "
+        "(Path: %v, FirstTabletIndex: %v, LastTabletIndex: %v, "
+        "Timeout: %v, MutationId: %v, Retry: %v)",
+        Path.GetPath(),
+        Options.FirstTabletIndex,
+        Options.LastTabletIndex,
+        Options.Timeout,
+        Options.MutationId,
+        Options.Retry);
+
     auto asyncResult = context->GetClient()->UnfreezeTable(
         Path.GetPath(),
         Options);
+    YT_LOG_DEBUG("@@gearonixx_driver unfreeze_table: client->UnfreezeTable dispatched, awaiting future "
+        "(Path: %v, IsSet: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+        Path.GetPath(),
+        asyncResult.IsSet(),
+        Options.FirstTabletIndex,
+        Options.LastTabletIndex);
+
     WaitFor(asyncResult)
         .ThrowOnError();
+    YT_LOG_DEBUG("@@gearonixx_driver unfreeze_table: client->UnfreezeTable completed OK "
+        "(Path: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+        Path.GetPath(),
+        Options.FirstTabletIndex,
+        Options.LastTabletIndex);
 
     ProduceEmptyOutput(context);
+    YT_LOG_DEBUG("@@gearonixx_driver unfreeze_table: empty output produced, command done (Path: %v)",
+        Path.GetPath());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
