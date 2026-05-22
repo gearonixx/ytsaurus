@@ -23,6 +23,13 @@ void FormatValue(TStringBuilderBase* builder, TProtocolVersion version, TStringB
 ////////////////////////////////////////////////////////////////////////////////
 
 constexpr TProtocolVersion GenericProtocolVersion{-1, -1};
+
+
+//    то "нулевая точка отсчёта" — версия для сервисов, которые либо:
+//
+// Новые и пока не нуждаются в версионировании.
+// Старые и никогда не вводили версионирование (legacy).
+// Внутренние/служебные, где совместимость не важна.
 constexpr TProtocolVersion DefaultProtocolVersion{0, 0};
 
 ////////////////////////////////////////////////////////////////////////////////

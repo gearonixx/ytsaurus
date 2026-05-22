@@ -253,6 +253,7 @@ DEFINE_ENUM(EDictionaryCompressionPolicy,
     ((FreshChunkFirst)       (2))
 );
 
+//  ExternalCellTag: 1 = таблица externalized на secondary-мастер с тегом 1.
 using TTableId = NCypressClient::TNodeId;
 using TTableCollocationId = NObjectClient::TObjectId;
 using TMasterTableSchemaId = NObjectClient::TObjectId;

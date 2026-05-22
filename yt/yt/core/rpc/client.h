@@ -430,6 +430,10 @@ private:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+///
+///
+/// В YT RPC-фреймворк (yt/yt/core/rpc/) построен по схем
+/// Когда клиент посылает RPC-запрос, в нём есть поля-маркеры: имя сервиса, имя метода, версия протокола
 
 struct TServiceDescriptor
 {
@@ -438,6 +442,7 @@ struct TServiceDescriptor
     std::string Namespace;
     TProtocolVersion ProtocolVersion = DefaultProtocolVersion;
     TFeatureIdFormatter FeatureIdFormatter = nullptr;
+    // согласен ли сервис принимать baggage — дополнительный трейсинг-контекст (в стиле OpenTracing/OpenTelemetry baggage
     bool AcceptsBaggage = true;
 
     explicit TServiceDescriptor(std::string serviceName);
@@ -509,7 +514,9 @@ public:
     DEFINE_BYREF_RW_PROPERTY(TStreamingParameters, DefaultServerAttachmentsStreamingParameters);
 
 protected:
+    // "Куда слать" — RPC-канал, физическая связь до сервера.
     const IChannelPtr Channel_;
+    // "Как маркировать" — паспорт сервиса (имя, namespace, версия протокола).
     const TServiceDescriptor ServiceDescriptor_;
 
     TProxyBase(

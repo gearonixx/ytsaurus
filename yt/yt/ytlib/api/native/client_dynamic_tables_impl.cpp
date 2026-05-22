@@ -2257,7 +2257,11 @@ void TClient::ExecuteTabletServiceRequest(
         ValidatePermissionImpl(path, EPermission::Mount);
     }
 
+    // native cell tag = короткий числовой id мастер-сервера, на котором изначально создана таблица и где живут её родные метаданные. CellTagFromId(tableId) просто вынимает этот тэг из бит самого
+   // TGuid — он зашит туда при создании объекта. У тебя в логе 1, потому что в локальном кластере один primary master, и ему по дефолту присвоен tag 1.
+// 2026-05-22 13:48:29,369032	D	Api	@@gearonixx_driver computed nativeCellTag (NativeCellTag: 1, ClientId: 3db2719c-f0d5f9aa-27d613a3-c10b7a4e, AuthenticatedUser: root)	Connection:1	fffee69d59e910a2	e9c2e680-92eb3787-fc499375-83247e48
     auto nativeCellTag = CellTagFromId(tableId);
+    // 1
     YT_LOG_DEBUG("@@gearonixx_driver computed nativeCellTag (NativeCellTag: %v)",
         nativeCellTag);
 
@@ -2288,6 +2292,7 @@ void TClient::ExecuteTabletServiceRequest(
     YT_LOG_DEBUG("@@gearonixx_driver native master transaction started (TransactionId: %v)",
         transaction->GetId());
 
+    // он ипшет в него tableID и потом топравляет?
     ToProto(req->mutable_table_id(), tableId);
     YT_LOG_DEBUG("@@gearonixx_driver req.table_id set (TableId: %v)",
         tableId);
@@ -2407,10 +2412,16 @@ void TClient::DoFreezeTable(
 
     // freeze dynamic request
 
-  //   ● TReqFreeze — это protobuf-сообщение, описанное в .proto файле tablet service; такие классы автогенерируются для каждого RPC-метода и нужны, чтобы клиент и сервер могли сериализовать/десериализовать
+  //   ● TReqFreeze — это protobuf-сообщение, описанное в .proto файле tablet service; такие классы автогенерируются для каждого RPC-метода
+  //   и нужны, чтобы клиент и сервер могли сериализовать/десериализовать
   // параметры вызова в единый бинарный формат и передавать их по сети.
-    // По RPC — protobuf это только формат сериализации тела запроса. YT-RPC оборачивает сериализованный TReqFreeze в свой сетевой протокол (поверх Bus/TCP) с заголовками, типом метода, mutation id
+    // По RPC — protobuf это только формат сериализации тела запроса. YT-RPC оборачивает сериализованный TReqFreeze в свой сетевой
+    // протокол (поверх Bus/TCP) с заголовками, типом метода, mutation id
 
+
+    // ровно так: first_tablet_index/last_tablet_index задают диапазон таблетов (шардов) таблицы, которые нужно заморозить; если не указать — замораживается вся таблица целиком.
+
+    // Создаёт пустой C++-объект protobuf-сообщения
     NTabletClient::NProto::TReqFreeze req;
     if (options.FirstTabletIndex) {
         req.set_first_tablet_index(*options.FirstTabletIndex);

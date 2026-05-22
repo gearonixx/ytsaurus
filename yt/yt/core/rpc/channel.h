@@ -89,6 +89,7 @@ struct TSendOptions
 /*!
  * \note Thread affinity: any.
  */
+    //
 struct IChannel
     : public virtual TRefCounted
 {
@@ -109,6 +110,7 @@ struct IChannel
      *  the latter could be |nullptr| if no control is supported by the implementation in general
      *  or for this particular request.
      */
+    // Это главный метод интерфейса IChannel. Через него прокси посылает любой RPC.
     virtual IClientRequestControlPtr Send(
         IClientRequestPtr request,
         IClientResponseHandlerPtr responseHandler,

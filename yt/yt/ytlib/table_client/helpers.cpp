@@ -949,21 +949,39 @@ IAttributeDictionaryPtr ResolveExternalTable(
     YT_LOG_DEBUG("@@gearonixx_driver proxy created");
 
     {
+        // //home/dyn_table_rpc_1)
         YT_LOG_DEBUG("@@gearonixx_driver step 1: GetBasicAttributes(path) -> resolve path to object_id + external_cell_tag (Path: %v)",
             path);
+        // proto-сообщение YPath-подзапроса GetBasicAttributes
+
+        // Да, это пустой proto-запрос, в котором пока только проставлен path в YPath-заголовке. Никаких атрибутов в нём нет и быть не может — это сторона запроса,
+        // а не ответа. Атрибуты придут с мастера после Execute — в TRspGetBasicAttributes.
+        // //home/dyn_table_rpc_1) via the rpc proxy (proto)
         auto req = TObjectYPathProxy::GetBasicAttributes(path);
+        // proxy->Execute(req) шлёт на мастер один YPath-подзапрос GetBasicAttribute
+        // Execute(req) возвращает future с ответом, WaitFor блокирует файбер до его прихода и отдаёт TErrorOr — успех или ошибка.
+
+
+       // home/dyn_table_rpc_1) // GetBasicAttributes parsed (TableId: 1-c06-10191-6178162b, ExternalCellTag: 1)
+
         auto rspOrError = WaitFor(proxy->Execute(req));
         YT_LOG_DEBUG("@@gearonixx_driver GetBasicAttributes RPC returned (OK: %v)", rspOrError.IsOK());
         THROW_ERROR_EXCEPTION_IF_FAILED(rspOrError, "Error getting basic attributes of table %v", path);
         const auto& rsp = rspOrError.Value();
+        // это MinValidCellTag, самый первый валидный cell tag. То есть это обычная вторичная мастер-ячейка №1, не sentin
+        // object_id === tableI
         *tableId = FromProto<TTableId>(rsp->object_id());
         *externalCellTag = FromProto<TCellTag>(rsp->external_cell_tag());
-        YT_LOG_DEBUG("@@gearonixx_driver GetBasicAttributes parsed (TableId: %v, ExternalCellTag: %v)",
+        auto chunkCount = rsp->chunk_count();
+        // это MinValidCellTag, самый первый валидный cell tag. То есть это обычная вторичная мастер-ячейка №1, не sentinel.
+        YT_LOG_DEBUG("@@gearonixx_driver GetBasicAttributes parsed (TableId: %v, ExternalCellTag: %v, ChunkCount: %v)",
             *tableId,
-            *externalCellTag);
+            *externalCellTag,
+            chunkCount);
     }
 
     YT_LOG_DEBUG("@@gearonixx_driver checking IsTabletOwnerType (TypeFromId: %v)", TypeFromId(*tableId));
+    // tablet owner - should be a dynamic table
     if (!IsTabletOwnerType(TypeFromId(*tableId))) {
         YT_LOG_DEBUG("@@gearonixx_driver NOT a tablet owner -> throwing");
         THROW_ERROR_EXCEPTION("%v is not a tablet owner", path);
@@ -972,17 +990,74 @@ IAttributeDictionaryPtr ResolveExternalTable(
 
     IAttributeDictionaryPtr extraAttributes;
     {
+        //        {"chunk_count"});
+        // tablet_cell_bundle — имя «бандла» tablet cell'ов, на которых обслуживается динамическая таблица; для статической просто метка, ни на что не влияющая. Драйверу нужно понять, через какой пул tablet-нод
+        // ходить при чтении динамики.
         auto keys = extraAttributeKeys;
         keys.push_back("dynamic");
+        // Нет, это просто строка-имя бандла, например default или sys. Бандлы — отдельные объекты в Cypress (лежат в //sys/tablet_cell_bundles/<имя>), и у таблицы хранится именно их имя, а не id.
+        // tablet_cell_bundle, path, dynamic
+
+
+  // Динамические таблицы в YT обслуживаются не «дисковыми» нодами, как статические, а специальными процессами — tablet nodes. Каждая таблица разбита на tablet'ы (горизонтальные куски по диапазонам ключей), и
+  // каждый tablet в каждый момент времени «закреплён» за одним tablet cell — это реплика-группа из нескольких tablet-нод (обычно 3, с Hydra-консенсусом), которая держит этот tablet в памяти и отвечает за
+  // чтение/запись.
+  //
+  // Tablet cell bundle — это именованная группа tablet cell'ов с общими настройками (сколько cell'ов, на каких нодах их можно размещать, лимиты ресурсов, опции tablet-node'ов). По сути — пул tablet-вычислений.
+  // Когда таблице ставят tablet_cell_bundle = "foo", её tablet'ы будут распределяться только по cell'ам этого бандла; ресурсы и изоляция считаются на уровне бандла.
+        // 	TableClient	@@gearonixx_driver step 2: Get(#id/@) with attribute keys (Keys: [tablet_cell_bundle, path, dynamic])	Connection:0	fffee69b2644b6e5	7befbd89-ebc36a05-4afa027-e4d3ed95
+        //
+        // ● tablet_cell_bundle в ответе придёт строкой — именем бандла, например "default". Драйвер по нему поймёт, в какой пул tablet cell'ов (серверов) ходить, если таблица окажется динамической. Для статической
+        //   таблицы значение тоже есть, но не используется
+
+  //       TObjectYPathProxy::GetBasicAttributes(path) — лёгкий специальный метод: по пути (ещё не зная id) мастер возвращает фиксированный мини-набор «базовых» полей — object_id, type, external_cell_tag, права. Это
+  // step 1, чтобы вообще узнать id и где живёт объект.
+  //
+  // TTableYPathProxy::Get(#id/@) — это уже общий Get по дереву Cypress, применённый к виртуальной «папке атрибутов» @. Возвращает произвольные атрибуты, которые ты сам перечислил в keys (schema, dynamic,
+  // tablet_cell_bundle, …). Универсальный, но тяжелее, и обращается уже по id, полученному на step 1.
+
+
+        // ПРИМЕРНО ВОТ ТАК
+        // {
+        //     "dynamic": false,
+        //     "schema": [
+        //       {"name": "key", "type": "string", "sort_order": "ascending"},
+        //       {"name": "value", "type": "int64"}
+        //     ],
+        //     "tablet_cell_bundle": "default",
+        //  - optimize_for: "scan" — колоночное хранение (хорошо для аналитики/сканов больших диапазонов), вместо дефолтного "lookup" (построчного, быстрее точечные lookup'ы).
+        //     "optimize_for": "scan",
+        // - enable_dynamic_store_read: true — разрешает читать ещё не сфлашенные на диск свежие данные (dynamic store) обычным read_table, а не только через select_rows/lookup_row
+        //  Динамическая таблица сначала держит новые записи в памяти (это и есть dynamic store), а потом скидывает их на диск. Без этого флага read_table видит только то, что уже на диске — свежие записи пропадают. С
+        // true — видит и память тоже, то есть читает реально всё.
+        //     "enable_dynamic_store_read": true
+        //   }
+
+
+        //  И нет — этот RPC Get(#id/@) тянет только атрибуты узла (всё что после @): метаданные, схему, настройки.
+        //  Сами строки таблицы читаются отдельно — через ReadTable/LookupRows/SelectRows, это уже другой путь
+        // (table_client читает чанки из data node'ов, а не из мастера
+
+
         YT_LOG_DEBUG("@@gearonixx_driver step 2: Get(#id/@) with attribute keys (Keys: %v)", keys);
+        // параметры и values
         auto req = TTableYPathProxy::Get(FromObjectId(*tableId) + "/@");
         ToProto(req->mutable_attributes()->mutable_keys(), keys);
         auto rspOrError = WaitFor(proxy->Execute(req));
+
+        // ● Готово. Теперь после парсинга для каждого ключа печатается отдельная строка с его YSON-значением — увидишь, например,
+        // Key: dynamic, Value: %false, Key: tablet_cell_bundle, Value: "default", Key: path,
+        //   Value: "//tmp/...".
         YT_LOG_DEBUG("@@gearonixx_driver Get(#id/@) RPC returned (OK: %v)", rspOrError.IsOK());
         THROW_ERROR_EXCEPTION_IF_FAILED(rspOrError, "Error getting extended attributes of table %v", path);
         const auto& rsp = rspOrError.Value();
         extraAttributes = ConvertToAttributes(TYsonString(rsp->value()));
-        YT_LOG_DEBUG("@@gearonixx_driver extraAttributes parsed from YSON");
+        for (const auto& key : extraAttributes->ListKeys()) {
+
+            YT_LOG_DEBUG("@@gearonixx_driver extraAttributes value (Key: %v, Value: %v)",
+                key,
+                extraAttributes->GetYson(key).AsStringBuf());
+        }
     }
 
     auto isDynamic = extraAttributes->Get<bool>("dynamic", false);

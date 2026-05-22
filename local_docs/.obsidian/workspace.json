@@ -55,12 +55,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "typed command.md",
+                "file": "freeze table.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "typed command"
+              "title": "freeze table"
             }
           }
         ],
@@ -228,16 +228,17 @@
   },
   "active": "1614dabfa888d2a4",
   "lastOpenFiles": [
+    "freeze.md",
+    "data nodes vs tablet vs exec.md",
+    "components.md",
+    "typed command.md",
     "Pasted image 20260520225556.png",
     "freeze table.md",
-    "typed command.md",
     "Pasted image 20260520162040.png",
     "mount table.md",
     "Pasted image 20260520024248.png",
     "Pasted image 20260520024219.png",
-    "data nodes vs tablet vs exec.md",
     "table parameters.md",
-    "freeze.md",
     "BUS.md",
     "yt and yt.md",
     "РАЗДЕЛЕНИЯ.md",
@@ -252,7 +253,6 @@
     "slices.md",
     "proto.md",
     "control attributes и options.md",
-    "components.md",
     "block fetcher.md",
     "atomic.md",
     "Pasted image 20260516225435.png",

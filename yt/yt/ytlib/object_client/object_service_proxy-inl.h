@@ -79,7 +79,10 @@ std::vector<std::pair<std::any, TErrorOr<TIntrusivePtr<TTypedResponse>>>> TObjec
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-
+///
+///
+/// Суть: Execute — это сахар над ExecuteBatch для случая «у меня ровно один подзапрос». Внутри всё равно batch на один элемент, просто прячется лишняя церемония.
+/// invoke a single batch req @gearonixx
 template <class TTypedRequest>
 TFuture<TIntrusivePtr<typename TTypedRequest::TTypedResponse> >
 TObjectServiceProxy::Execute(TIntrusivePtr<TTypedRequest> innerRequest)
