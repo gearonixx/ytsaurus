@@ -1121,6 +1121,13 @@ private:
             message->Type,
             SelfCellId_);
 
+        // Hive — это внутренний транспорт в YT для надёжной асинхронной доставки сообщений между Hydra-инстансами (master ↔ tablet cells, master ↔ master-cells и т.п.); по сути это набор «mailbox»-ов, привязанных к
+        // участникам кластера, с гарантией доставки и сохранения порядка
+
+
+        // ● Потому что master и tablet node — это разные Hydra-стейт-машины на разных хостах, каждая со своими лидером/follower'ами и снапшотами; напрямую дёрнуть RPC нельзя — оно не переживёт смену лидера, рестарт или
+       //  сетевой сбой. Hive даёт надёжную, упорядоченную, exactly-once доставку между такими стейт-машинами: master коммитит «отправить Freeze» в свой лог, и Hive гарантирует, что сообщение однажды применится в
+       // Hydra-логе ноды, что бы ни случилось по дороге.
         std::vector<TCellMailboxRuntimeDataPtr> cellRuntimeDatas;
         for (auto mailboxHandle : mailboxes) {
             auto* mailbox = AsTyped(mailboxHandle);

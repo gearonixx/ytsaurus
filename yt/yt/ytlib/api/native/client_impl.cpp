@@ -515,6 +515,8 @@ TObjectServiceProxy TClient::CreateObjectServiceReadProxy(
         Connection_->GetStickyGroupSizeCache());
 }
 
+//  Это просто фабрика для RPC-прокси к мастеру: TCellTag — какой мастер-сервер (если их несколько), Write — берёт канал к лидеру (чтения можно с follower, записи только на лидера). MakeStrong(this) держит
+// клиента живым. Сам метод ничего не делает — пробрасывает вызов в helper из namespace NObjectClient.
 TObjectServiceProxy TClient::CreateObjectServiceWriteProxy(
     TCellTag cellTag)
 {

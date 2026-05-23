@@ -106,6 +106,14 @@ struct IAlertCollector
     //! NB: Due to the comment above, it is important to keep the number of (category, tags) combinations very reasonably finite, since each of them causes a sensor to be produced.
     virtual void PublishAlerts() = 0;
 
+    // TODO(achulkov2): реализовать механизм для очистки ненужных gauge'ей.
+
+//! An owning variant of TUnversionedRow.
+    // @gearoinxx
+    // Контекст: gauge — это тип метрики (текущее значение, в отличие от counter'а который только растёт). Видимо где-то регистрируются метрики per-something (per-query, per-user), и со временем накапливается мусор от уже неактуальных сущностей — надо их вычищать.
+    // 3:34 AMClaude responded: Gauge — это метрика, которая показывает текущее значение в моменте: может расти, падать, прыгать как угодно.
+    // Gauge — это метрика, которая показывает текущее значение в моменте: может расти, падать, прыгать как угодно. Примеры: количество активных запросов, размер очереди, использование памяти, температура.
+
     // TODO(achulkov2): Implement some mechanism for clearing out unneeded gauges.
 };
 

@@ -75,6 +75,7 @@ public:
             .Abort = BIND_NO_PROPAGATE(&TTabletService::HydraAbortUnmount, Unretained(this)),
         });
 
+        //  Да, по сути хеш-мапа TransactionId → TTransaction* (живёт в TransactionManager из transaction_server).
         transactionManager->RegisterTransactionActionHandlers<TReqFreeze>({
             .Prepare = BIND_NO_PROPAGATE(&TTabletService::HydraPrepareFreeze, Unretained(this)),
             .Commit = BIND_NO_PROPAGATE(&TTabletService::HydraCommitFreeze, Unretained(this)),
@@ -106,6 +107,9 @@ private:
 
     static void ValidateNoParentTransaction(TTransaction* transaction)
     {
+        // Это запрет на вложенные транзакции: GetParent() непустой только у дочерней транзакции. Многие табличные операции (mount/unmount, alter, freeze и т.п.) меняют глобальное состояние таблетов через 2PC между
+        // мастером и tablet node — если бы их разрешили внутри пользовательской транзакции, пришлось бы откатывать tablet-side эффекты при её abort'е, а инфраструктуры для этого нет. Поэтому такие операции делают
+        // только в top-level транзакции (которую мастер сам коммитит атомарно).
         if (transaction->GetParent()) {
             THROW_ERROR_EXCEPTION("Operation cannot be performed in transaction");
         }
@@ -127,6 +131,7 @@ private:
     {
         const auto& securityManager = Bootstrap_->GetSecurityManager();
         const auto& cellBundle = table->TabletCellBundle();
+        // i have seen that somethere before
         securityManager->ValidatePermission(cellBundle.Get(), EPermission::Use);
     }
 
@@ -148,6 +153,7 @@ private:
         const auto& securityManager = Bootstrap_->GetSecurityManager();
         TAuthenticatedUserGuard userGuard(securityManager);
 
+        //  Tablet owner — любой объект мастера, который владеет таблетами (шардами). Базовый класс TTabletOwnerBase, о
         YT_LOG_DEBUG("Preparing table mount (TableId: %v, TransactionId: %v, %v, "
             "FirstTabletIndex: %v, LastTabletIndex: %v, CellId: %v, TargetCellIds: %v, Freeze: %v, MountTimestamp: %v)",
             tableId,
@@ -163,6 +169,7 @@ private:
         ValidateNoParentTransaction(transaction);
 
         const auto& cypressManager = Bootstrap_->GetCypressManager();
+        //  Tablet owner — любой объект мастера, который владеет таблетами (шардами). Базовый класс TTabletOwnerBase, о
         auto* table = AsTabletOwnerSafe(cypressManager->GetNodeOrThrow(TVersionedNodeId(tableId)));
 
         table->ValidateNoCurrentMountTransaction(Format("Cannot mount %v", table->GetLowercaseObjectName()));
@@ -418,6 +425,9 @@ private:
         YT_LOG_ACCESS(tableId, cypressManager->GetNodePath(table, nullptr), transaction, "AbortUnmount");
     }
 
+ //    «Cell» здесь = группа из нескольких реплик мастера, работающих
+ // через Hydra
+
     void HydraPrepareFreeze(
         TTransaction* transaction,
         NTabletClient::NProto::TReqFreeze* request,
@@ -427,6 +437,13 @@ private:
         int lastTabletIndex = request->last_tablet_index();
         auto tableId = FromProto<TTableId>(request->table_id());
 
+        YT_LOG_DEBUG("@@gearonixx_master HydraPrepareFreeze entered "
+            "(TableId: %v, TransactionId: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+            tableId,
+            transaction->GetId(),
+            firstTabletIndex,
+            lastTabletIndex);
+
         const auto& securityManager = Bootstrap_->GetSecurityManager();
         TAuthenticatedUserGuard userGuard(securityManager);
 
@@ -434,32 +451,71 @@ private:
             "FirstTabletIndex: %v, LastTabletIndex: %v)",
             tableId,
             transaction->GetId(),
+            //   - User: root
             NRpc::GetCurrentAuthenticationIdentity(),
             firstTabletIndex,
             lastTabletIndex);
 
         ValidateNoParentTransaction(transaction);
+        YT_LOG_DEBUG("@@gearonixx_master no-parent-transaction check passed (TransactionId: %v)",
+            transaction->GetId());
 
+        // CypressManager — подсистема мастера, владеющая Cypress-деревом
         const auto& cypressManager = Bootstrap_->GetCypressManager();
+        // каст к TTabletOwnerBase* (базовый класс для динтаблиц/hunk storage/replicated tables) и кидает исключение, если нода не tablet-owner.
         auto* table = AsTabletOwnerSafe(cypressManager->GetNodeOrThrow(TVersionedNodeId(tableId)));
+        YT_LOG_DEBUG("@@gearonixx_master resolved tablet-owner node (TableId: %v, IsNative: %v)",
+            tableId,
+            // true
+            // IsNative() — таблица «родная» этому кластеру (а не реплика чужой через cross-cluster механизмы); важно, потому что многие операции имеет
+            table->IsNative());
 
         ValidateUsePermissionOnCellBundle(table);
+        // Это список других мастер-cell'ов, с которыми надо синхронизировать Hydra-state перед prepare-фазой транзакции/мутации.
+        YT_LOG_DEBUG("@@gearonixx_master bundle Use-permission validated (TableId: %v)",
+            tableId);
 
+        // Проверка: у этой таблицы сейчас не идёт другая mount/unmount/freeze/unfreeze операция. Такие операции на мастере не мгновенные
+        // — они стартуют отдельную системную «mount transaction», шлют запросы в tablet
+        // cell'ы, ждут ответов. Пока эта транзакция не закоммитилась, на таблице висит её id.
         table->ValidateNoCurrentMountTransaction(Format("Cannot freeze %v", table->GetLowercaseObjectName()));
+        YT_LOG_DEBUG("@@gearonixx_master no-current-mount-transaction check passed (TableId: %v)",
+            tableId);
 
         if (table->IsNative()) {
+            //  Лок в Cypress — это запись «эта транзакция держит такое-то право на эту ноду». Пока лок жив, мастер не даст другим транзакциям делать конфликтующие изменения этой же ноды.
+            //  Лок = «застолбить» ноду в транзакции. Пока транзакция жива, другие не могут трогать эту ноду (или конкретный её кусок — зависит от режима: Exclusive = вообще никто, Shared = можно писать в разные места,
+            // Snapshot = просто читать зафиксированное). Закончилась транзакция — лок снят.
             cypressManager->LockNode(table, transaction, ELockMode::Exclusive, false, true);
+            YT_LOG_DEBUG("@@gearonixx_master Cypress node locked Exclusive (TableId: %v, TransactionId: %v)",
+                tableId,
+                transaction->GetId());
+        } else {
+            YT_LOG_DEBUG("@@gearonixx_master skipped LockNode: external cell (TableId: %v)",
+                tableId);
         }
 
         const auto& tabletManager = Bootstrap_->GetTabletManager();
+        // Это список других мастер-cell'ов, с которыми надо синхронизировать Hydra-state перед prepare-фазой транзакции/мутации.
+        // mount / remount table manager + tablet cell bundles
         tabletManager->PrepareFreeze(
             table,
             firstTabletIndex,
             lastTabletIndex);
+        YT_LOG_DEBUG("@@gearonixx_master tabletManager->PrepareFreeze done (TableId: %v)",
+            tableId);
 
+        //  Лок в Cypress — это запись «эта транзакция держит такое-то право на эту ноду». Пока лок жив, мастер не даст другим транзакциям делать конфликтующие изменения этой же ноды.
         table->LockCurrentMountTransaction(transaction->GetId());
+        YT_LOG_DEBUG("@@gearonixx_master LockCurrentMountTransaction done (TableId: %v, TransactionId: %v)",
+            tableId,
+            transaction->GetId());
 
         YT_LOG_ACCESS(tableId, cypressManager->GetNodePath(table, nullptr), transaction, "PrepareFreeze");
+
+        YT_LOG_DEBUG("@@gearonixx_master HydraPrepareFreeze exiting OK (TableId: %v, TransactionId: %v)",
+            tableId,
+            transaction->GetId());
     }
 
     void HydraCommitFreeze(
@@ -470,6 +526,13 @@ private:
         int firstTabletIndex = request->first_tablet_index();
         int lastTabletIndex = request->last_tablet_index();
         auto tableId = FromProto<TTableId>(request->table_id());
+
+        YT_LOG_DEBUG("@@gearonixx_master HydraCommitFreeze entered "
+            "(TableId: %v, TransactionId: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+            tableId,
+            transaction->GetId(),
+            firstTabletIndex,
+            lastTabletIndex);
 
         YT_LOG_DEBUG("Committing table freeze (TableId: %v, TransactionId: %v, %v, "
             "FirstTabletIndex: %v, LastTabletIndex: %v)",
@@ -483,22 +546,46 @@ private:
         auto* table = AsTabletOwnerSafe(cypressManager->FindNode(TVersionedNodeId(tableId)));
 
         if (!IsObjectAlive(table)) {
+            YT_LOG_DEBUG("@@gearonixx_master HydraCommitFreeze: table not alive, returning (TableId: %v)",
+                tableId);
             return;
         }
 
+        // Тут после коммита транзакции монтирования таблицу «отвязывают» от неё: UnlockCurrentMountTransaction снимает блокировку на таблице, а SetLastMountTransactionId запоминает id этой транзакции, чтобы потом
+        // отличать «свежие» mount/unmount-операции от устаревших (например, прилетевших с опозданием от tablet cell). Логи нужны, чтобы видеть порядок этих шагов в master при отладке.
+
+
+        //  Тут после коммита транзакции монтирования таблицу «отвязывают» от неё: UnlockCurrentMountTransaction снимает блокировку на таблице, а SetLastMountTransactionId запоминает id этой транзакции, чтобы потом
+        // отличать «свежие» mount/unmount-операции от устаревших (например, прилетевших с опозданием от tablet cell). Логи нужны, чтобы видеть порядок этих шагов в master при отладке.
+
+        // асимметрия: Lock строгий (ассерт, что блокировки ещё нет), а Unlock мягкий (молча ничего не делает, если id не совпадает). Unlock может прилететь от уже «протухшей»
+        // транзакции (например, после повторного mount другой транзакцией), и такой запоздалый вызов не должен сбрасывать актуальную блокировку.
         table->UnlockCurrentMountTransaction(transaction->GetId());
+        YT_LOG_DEBUG("@@gearonixx_master UnlockCurrentMountTransaction done (TableId: %v)",
+            tableId);
 
         table->SetLastMountTransactionId(transaction->GetId());
+        YT_LOG_DEBUG("@@gearonixx_master SetLastMountTransactionId done (TableId: %v, TransactionId: %v)",
+            tableId,
+            transaction->GetId());
 
         const auto& tabletManager = Bootstrap_->GetTabletManager();
         tabletManager->Freeze(
             table,
             firstTabletIndex,
             lastTabletIndex);
+        YT_LOG_DEBUG("@@gearonixx_master tabletManager->Freeze done — Hive messages to tablet cells dispatched (TableId: %v)",
+            tableId);
 
         YT_LOG_ACCESS(tableId, cypressManager->GetNodePath(table, nullptr), transaction, "CommitFreeze");
+
+        YT_LOG_DEBUG("@@gearonixx_master HydraCommitFreeze exiting OK (TableId: %v, TransactionId: %v)",
+            tableId,
+            transaction->GetId());
     }
 
+    // Abort случается, когда транзакция freeze не доехала до commit'а: либо prepare упал, либо клиент сам её отменил,
+    // либо она протухла по таймауту. Тогда мастер откатывает то, что зарезервировал PrepareFreeze.
     void HydraAbortFreeze(
         TTransaction* transaction,
         NTabletClient::NProto::TReqFreeze* request,
@@ -507,6 +594,13 @@ private:
         int firstTabletIndex = request->first_tablet_index();
         int lastTabletIndex = request->last_tablet_index();
         auto tableId = FromProto<TTableId>(request->table_id());
+
+        YT_LOG_DEBUG("@@gearonixx_master HydraAbortFreeze entered "
+            "(TableId: %v, TransactionId: %v, FirstTabletIndex: %v, LastTabletIndex: %v)",
+            tableId,
+            transaction->GetId(),
+            firstTabletIndex,
+            lastTabletIndex);
 
         YT_LOG_DEBUG("Aborting table freeze (TableId: %v, TransactionId: %v, %v, "
             "FirstTabletIndex: %v, LastTabletIndex: %v)",
@@ -519,13 +613,26 @@ private:
         const auto& cypressManager = Bootstrap_->GetCypressManager();
         auto* table = AsTabletOwnerSafe(cypressManager->FindNode(TVersionedNodeId(tableId)));
 
+
+        // @gearonixx
+        // Persistent state мастера можно трогать только на automaton thread. `FlushObjectUnrefs` сбрасывает накопленные отложенные unref'ы объектов именно на нём,
+        // где разрушать объекты безопасно. Две `Verify*` просто проверяют, что мы в правильном потоке — жёстко или с поблажкой для snapshot fork.
+
         if (!IsObjectAlive(table)) {
+            YT_LOG_DEBUG("@@gearonixx_master HydraAbortFreeze: table not alive, returning (TableId: %v)",
+                tableId);
             return;
         }
 
         table->UnlockCurrentMountTransaction(transaction->GetId());
+        YT_LOG_DEBUG("@@gearonixx_master UnlockCurrentMountTransaction done on abort (TableId: %v)",
+            tableId);
 
         YT_LOG_ACCESS(tableId, cypressManager->GetNodePath(table, nullptr), transaction, "AbortFreeze");
+
+        YT_LOG_DEBUG("@@gearonixx_master HydraAbortFreeze exiting (TableId: %v, TransactionId: %v)",
+            tableId,
+            transaction->GetId());
     }
 
     void HydraPrepareUnfreeze(

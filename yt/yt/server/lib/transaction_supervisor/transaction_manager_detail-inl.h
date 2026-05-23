@@ -52,7 +52,15 @@ void TTransactionManagerBase<TTransaction, TSaveContext, TLoadContext>::RunPrepa
             }
             const auto& descriptor = it->second;
             auto* state = GetOrCreateTransactionActionState(&action, descriptor);
+            YT_LOG_DEBUG("@@gearonixx_driver dispatching Prepare action (TransactionId: %v, ActionType: %v, ActionIndex: %v)",
+                transaction->GetId(),
+                action.Type,
+                index);
             descriptor.Prepare(transaction, action.Value, state, options);
+            YT_LOG_DEBUG("@@gearonixx_driver Prepare action done (TransactionId: %v, ActionType: %v, ActionIndex: %v)",
+                transaction->GetId(),
+                action.Type,
+                index);
         } catch (const std::exception& ex) {
             YT_LOG_DEBUG(ex, "Prepare action failed (TransactionId: %v, ActionType: %v)",
                 transaction->GetId(),
@@ -89,7 +97,15 @@ void TTransactionManagerBase<TTransaction, TSaveContext, TLoadContext>::RunCommi
             const auto& descriptor = it->second;
             needDestroyState = !descriptor.HasSerializeHandler();
             auto* state = GetOrCreateTransactionActionState(&action, descriptor);
+            YT_LOG_DEBUG("@@gearonixx_driver dispatching Commit action (TransactionId: %v, ActionType: %v, ActionIndex: %v)",
+                transaction->GetId(),
+                action.Type,
+                index);
             descriptor.Commit(transaction, action.Value, state, options);
+            YT_LOG_DEBUG("@@gearonixx_driver Commit action done (TransactionId: %v, ActionType: %v, ActionIndex: %v)",
+                transaction->GetId(),
+                action.Type,
+                index);
         } catch (const std::exception& ex) {
             YT_LOG_ALERT(ex, "Commit action failed (TransactionId: %v, ActionType: %v)",
                 transaction->GetId(),
@@ -126,7 +142,15 @@ void TTransactionManagerBase<TTransaction, TSaveContext, TLoadContext>::RunAbort
             }
             const auto& descriptor = it->second;
             auto* state = GetOrCreateTransactionActionState(&action, descriptor);
+            YT_LOG_DEBUG("@@gearonixx_driver dispatching Abort action (TransactionId: %v, ActionType: %v, ActionIndex: %v)",
+                transaction->GetId(),
+                action.Type,
+                index);
             descriptor.Abort(transaction, action.Value, state, options);
+            YT_LOG_DEBUG("@@gearonixx_driver Abort action done (TransactionId: %v, ActionType: %v, ActionIndex: %v)",
+                transaction->GetId(),
+                action.Type,
+                index);
         } catch (const std::exception& ex) {
             YT_LOG_ALERT(ex, "Abort action failed (TransactionId: %v, ActionType: %v)",
                 transaction->GetId(),

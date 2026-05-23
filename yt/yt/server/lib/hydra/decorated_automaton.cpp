@@ -1427,6 +1427,21 @@ void TDecoratedAutomaton::DoApplyMutation(
             }
         });
 
+        if (request.Type.find("Coordinator") != TString::npos ||
+            request.Type.find("Participant") != TString::npos ||
+            request.Type.find("Freeze") != TString::npos)
+        {
+            YT_LOG_DEBUG("@@gearonixx_hydra DoApplyMutation "
+                "(MutationType: %v, SequenceNumber: %v, Term: %v, Reign: %v, MutationId: %v, DataSize: %v) — "
+                "Hydra replicated this mutation to a quorum and is now invoking the registered handler",
+                request.Type,
+                mutationContext->GetSequenceNumber(),
+                term,
+                reign,
+                mutationId,
+                mutationSize);
+        }
+
         if (request.Type == EnterReadOnlyMutationType || request.Type == ExitReadOnlyMutationType) {
             ReadOnly_ = request.Type == EnterReadOnlyMutationType;
 

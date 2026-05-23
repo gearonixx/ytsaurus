@@ -1281,6 +1281,8 @@ TObjectServiceProxy CreateObjectServiceReadProxy(
         std::move(stickyGroupSizeCache));
 }
 
+    // Read: можно читать с любого мастера (лидер, follower, кэш) — быстрее, неактуально на доли секунды.
+    // Write: только лидер, иначе изменения не запишутся в Hydra-лог.
 TObjectServiceProxy CreateObjectServiceReadProxy(
     IConnectionPtr connection,
     NApi::EMasterChannelKind readFrom,
@@ -1291,6 +1293,9 @@ TObjectServiceProxy CreateObjectServiceReadProxy(
         std::move(connection),
         readFrom,
         cellTag,
+        // Это кэш для распределения чтений между несколькими follower-мастерами, чтобы одинаковые запросы шли в одну реплику и её кэш «разогревался».
+        // Для write лидер один — балансировать не между чем, поэтому
+        // nullptr. (во write)
         std::move(stickyGroupSizeCache));
 }
 

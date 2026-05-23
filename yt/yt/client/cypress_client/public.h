@@ -22,6 +22,13 @@ using TVersionedNodeId = TVersionedObjectId;
 
 extern const TLockId NullLockId;
 
+
+// @gearonixx
+// - None — лока нет.
+// - Snapshot — самый слабый: «зафиксировать вид ноды для чтения», не мешает другим писать.
+// - Shared — средний: можно держать одновременно несколькими транзакциями, конфликт только при перекрытии конкретных дочерних ключей/атрибутов.
+// - Exclusive — самый сильный: один владелец, никто другой ничего не может.
+
 // NB: The order is from weakest to strongest.
 DEFINE_ENUM_WITH_UNDERLYING_TYPE(ELockMode, i8,
     ((None)      (0))

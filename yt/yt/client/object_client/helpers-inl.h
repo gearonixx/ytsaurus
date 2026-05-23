@@ -39,9 +39,11 @@ inline ui32 EntropyFromId(TObjectId id)
     return id.Parts32[0];
 }
 
+// returns логическую версию мутации Hydra, в рамках которой объект был создан/изменён.
 // TODO(h0pless): Replace TVersion with TLogicalVersion.
 inline NHydra::TVersion VersionFromId(TObjectId id)
 {
+    // should be not sequoia id
     YT_ASSERT(!IsSequoiaId(id));
     return NHydra::TLogicalVersion::FromRevision(RevisionFromId(id));
 }
@@ -103,6 +105,9 @@ inline bool IsWellKnownId(TObjectId id)
  //    Да, шард = просто кусок данных (подмножество строк/ключей), живущий на отдельном сервере.
  //
  // Горизонтально = добавляешь больше машин рядом. Вертикально = делаешь одну машину мощнее (CPU/RAM).
+
+
+    // чек на isSequoeia
 inline bool IsSequoiaId(TObjectId id)
 {
     // NB: Well-known objects have Sequoia bit set.

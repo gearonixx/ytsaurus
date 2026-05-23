@@ -2208,6 +2208,7 @@ void TClient::ExecuteTabletServiceRequest(
     TCellTag externalCellTag;
     //  Хелпер из yt/yt/ytlib/table_client/helpers.cpp:918. Делает два RPC к primary master через TObjectServiceProxy: первый — GetBasicAttributes(path) → достаёт object_id и external_cell_tag; затем проверяет, что
     // это tablet owner (динамическая таблица); второй — Get("#id/@", keys=...) → тянет запрошенные атрибуты по id (а не по пути, чтобы не зарезолвить заново).
+    // достает аттрибуты по факту
     auto tableAttributes = NTableClient::ResolveExternalTable(
         MakeStrong(this),
         path,
@@ -2266,11 +2267,26 @@ void TClient::ExecuteTabletServiceRequest(
         nativeCellTag);
 
     auto transactionAttributes = CreateEphemeralAttributes();
+
+
+  //   ● Query Tracker — это сервис YTsaurus, который принимает аналитические запросы (YQL, CHYT/ClickHouse, SPYT/Spark, обычный YT QL) от пользователей, ставит их в очередь, запускает на нужном движке и хранит
+  // состояние/результаты. //sys/query_tracker/active_queries — динамическая таблица в Cypress, где он держит список запросов, выполняющихся прямо сейчас (id, юзер, движок, статус и т.п.).
+
+
+ //    YQL agent — отдельный сервис-исполнитель YQL-запросов рядом с YTsaurus. Query Tracker сам YQL не считает: он отдаёт текст запроса агенту, тот парсит YQL, строит план, компилирует его в YT-операции
+ // (MapReduce/Merge/Sort и т.п.), запускает их на кластере и возвращает результат обратно в Query Tracker. То есть QT — диспетчер, YQL agent — мозг конкретно для YQL-движка.
     auto txTitle = Format("%v node %v", action, path);
+
+    // figre out the "transaction attributes" there
     transactionAttributes->Set("title", txTitle);
+
+
+    // YTsaurus берёт парсер/оптимизатор YQL и компилирует запросы в свои MapReduce-операции,
+
     YT_LOG_DEBUG("@@gearonixx_driver built transaction attributes (Title: %v)",
         txTitle);
 
+    // — атомарно прицепить новые чанки к узлу таблицы в Cypress — делает мастер в рамках транзакции
     TTransactionStartOptions transactionOptions;
     transactionOptions.Attributes = std::move(transactionAttributes);
     transactionOptions.SuppressStartTimestampGeneration = true,
@@ -2313,24 +2329,41 @@ void TClient::ExecuteTabletServiceRequest(
         nativeCellId,
         externalCellId);
 
+    // в список pending-actions этой транзакции — никакого RPC ещё не идёт.
+    // Потому что action — это «выполни этот код на КОНКРЕТНОЙ ячейке мастера». У каждой master cell свой Hydra-лог и свой кусок состоя
     transaction->AddAction(nativeCellId, actionData);
     YT_LOG_DEBUG("@@gearonixx_driver added action to native cell (NativeCellId: %v)",
         nativeCellId);
+    // External cell — это мастер-ячейка, на которую «отселён» сам объект таблицы (её table_id и тяжёлые tablet-данные), когда включён multicell.
     if (nativeCellId != externalCellId) {
         transaction->AddAction(externalCellId, actionData);
         YT_LOG_DEBUG("@@gearonixx_driver added action to external cell (ExternalCellId: %v)",
             externalCellId);
     }
 
+    // 2PC = Two-Phase Commit, двухфазный коммит
     YT_LOG_DEBUG("@@gearonixx_driver committing transaction "
         "(TransactionId: %v, Force2PC: %v, CoordinatorCommitMode: Lazy, CellIdsToSyncWithBeforePrepare: %v)",
         transaction->GetId(),
         true,
         std::vector<TCellId>{nativeCellId});
 
+    // Эта транзакция доставляет сам tablet-запрос (req — Freeze/Unfreeze/Mount/…) до мастера как transaction action: вместо прямого RPC к tablet-service её коммитят в режиме 2PC, и на prepare-фазе мастер
+    // выполняет привязанный actionData атомарно сразу на нативной и внешней ячейках (для external-таблиц table_id живёт на одной ячейке, а path/Cypress-узел — на другой), а CoordinatorCommitMode::Lazy означает,
+    // что коммит координатора отложен до подтверждения участниками.
+    // ● Чтобы изменение либо целиком применилось на всех мастерах, либо целиком не применилось — без полузамороженных таблиц при сбое.
     WaitFor(transaction->Commit(TTransactionCommitOptions{
+        // - Force2PC = True — принудительный двухфазный коммит (Prepare → Commit) даже если участник один; нужен потому, что транзакция несёт transaction action,
+            // безопасно выполнить action и при неудаче откатить всё (например, проверить, что таблица всё ещё существует / не примонтирована иначе / квоты ок). С Force2PC появляется фаза Prepare:
+        // мастер на ней запускает action, валидирует инварианты, берёт нужные лок
         .Force2PC = true,
+        //  Координатор после prepare должен сам записать «всё, коммит». В Lazy он не ждёт, пока эта запись сохранится — отвечает клиенту «ОК» сразу, а сам допишет позже. Быстрее, и клиенту это не важно: изменение уже
+        // применили участники.
+        // В Eager координатор сначала дожидается, пока его собственная запись «коммит зафиксирован» надёжно сохранится (в Hydra-логе, с репликацией), и только потом отвечает клиенту «ОК». Медленнее, зато при падении
+        // координатора сразу после ответа клиенту гарантированно известно, что транзакция закоммичена.
         .CoordinatorCommitMode = ETransactionCoordinatorCommitMode::Lazy,
+        // Перед тем как слать Prepare участникам, клиент сначала делает sync с перечисленными ячейками — то есть ждёт, пока локальное состояние этих ячеек догонит их последний зафиксированный коммит (catch-up по
+        // Hydra-логу).
         .CellIdsToSyncWithBeforePrepare = {nativeCellId}
     }))
         .ThrowOnError();
@@ -2438,6 +2471,7 @@ void TClient::DoFreezeTable(
 
     // RPC-запрос req (FreezeTablets) на tablet service для таблицы path, а строка "Freezing" — это просто человекочитаемый лейбл операции для
     // логов и сообщений об ошибках.
+    //  то что я увидел это proto + transaction + rpc до мастера и резолвится через гидру
     ExecuteTabletServiceRequest(path, "Freezing", &req);
     YT_LOG_DEBUG("@@gearonixx_driver native::TClient::DoFreezeTable ExecuteTabletServiceRequest returned OK (Path: %v)",
         path);

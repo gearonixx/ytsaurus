@@ -922,6 +922,14 @@ private:
             auto prepareOnlyParticipantCellIds = FromProto<std::vector<TCellId>>(request->prepare_only_participant_cell_ids());
             auto cellIdsToSyncWithBeforePrepare = FromProto<std::vector<TCellId>>(request->cell_ids_to_sync_with_before_prepare());
             auto force2PC = request->force_2pc();
+            //  TabletManager — подсистема мастера (yt/yt/server/master/tablet_server/tablet_manager.h),
+            //  которая управляет жизненным циклом таблетов и всем, что с ними связано.
+            YT_LOG_DEBUG("@@gearonixx_master CommitTransaction RPC entered "
+                "(TransactionId: %v, ParticipantCellIds: %v, Force2PC: %v, CellIdsToSyncWithBeforePrepare: %v)",
+                transactionId,
+                participantCellIds,
+                force2PC,
+                cellIdsToSyncWithBeforePrepare);
             auto generatePrepareTimestamp = request->generate_prepare_timestamp();
             auto inheritCommitTimestamp = request->inherit_commit_timestamp();
             auto coordinatorCommitMode = FromProto<ETransactionCoordinatorCommitMode>(request->coordinator_commit_mode());
@@ -1477,6 +1485,7 @@ private:
         return asyncResponseMessage;
     }
 
+    // TabletManager — подсистема мастера (yt/yt/server/master/tablet_server/tablet_manager.h),
     void CommitSimpleTransaction(TCommit* commit)
     {
         YT_VERIFY(!commit->GetPersistent());
@@ -1491,6 +1500,13 @@ private:
             // Any exception thrown here is replied to the client.
             auto prepareTimestamp = TimestampProvider_->GetLatestTimestamp();
 
+
+ //            TabletManager — подсистема мастера (yt/yt/server/master/tablet_server/tablet_manager.h), которая управляет жизненным циклом таблетов и всем, что с ними связано.
+ //
+ //             Отвечает за:
+            // - mount / unmount / freeze / unfreeze / remount / reshard таблетов;
+
+            //  TabletManager — подсистема мастера (yt/yt/server/master/tablet_server/tablet_manager.h), которая управляет жизненным циклом таблетов и всем
             TTransactionPrepareOptions options{
                 .Persistent = false,
                 .LatePrepare = true, // Technically true.
@@ -1752,6 +1768,9 @@ private:
 
     void HydraCoordinatorCommitDistributedTransactionPhaseOne(NTransactionSupervisor::NProto::TReqCoordinatorCommitDistributedTransactionPhaseOne* request)
     {
+        YT_LOG_DEBUG("@@gearonixx_master HydraCoordinatorCommitDistributedTransactionPhaseOne entered "
+            "(TransactionId: %v) — replicated mutation reached automaton; about to run prepare on participants",
+            FromProto<TTransactionId>(request->transaction_id()));
         auto transactionId = FromProto<TTransactionId>(request->transaction_id());
         auto mutationId = FromProto<TMutationId>(request->mutation_id());
         auto participantCellIds = FromProto<std::vector<TCellId>>(request->participant_cell_ids());
@@ -1818,6 +1837,8 @@ private:
         if (coordinatorPrepareMode == ETransactionCoordinatorPrepareMode::Early &&
             !RunCoordinatorPrepare(commit))
         {
+            YT_LOG_DEBUG("@@gearonixx_master PhaseOne aborted in coordinator prepare (TransactionId: %v)",
+                transactionId);
             return;
         }
 
@@ -1828,10 +1849,15 @@ private:
 
         ChangeCommitPersistentState(commit, ECommitState::Prepare);
         ChangeCommitTransientState(commit, ECommitState::Prepare);
+        YT_LOG_DEBUG("@@gearonixx_master PhaseOne done — commit moved to Prepare state; participants will be asked to prepare (TransactionId: %v)",
+            transactionId);
     }
 
     void HydraCoordinatorCommitDistributedTransactionPhaseTwo(NTransactionSupervisor::NProto::TReqCoordinatorCommitDistributedTransactionPhaseTwo* request)
     {
+        YT_LOG_DEBUG("@@gearonixx_master HydraCoordinatorCommitDistributedTransactionPhaseTwo entered "
+            "(TransactionId: %v) — all participants prepared OK; commit timestamps received",
+            FromProto<TTransactionId>(request->transaction_id()));
         auto transactionId = FromProto<TTransactionId>(request->transaction_id());
         auto commitTimestamps = FromProto<TTimestampMap>(request->commit_timestamps());
 
@@ -1898,7 +1924,15 @@ private:
         } else if (commit->GetCoordinatorCommitMode() == ETransactionCoordinatorCommitMode::Eager ||
             commit->GetCoordinatorPrepareMode() == ETransactionCoordinatorPrepareMode::Late)
         {
+            YT_LOG_DEBUG("@@gearonixx_master PhaseTwo: running coordinator commit inline (Eager or LatePrepare) "
+                "(TransactionId: %v)",
+                transactionId);
             RunCoordinatorCommit(commit);
+        } else {
+            YT_LOG_DEBUG("@@gearonixx_master PhaseTwo: deferred coordinator commit (Lazy mode) — "
+                "client gets OK after participants confirm, coordinator writes commit later "
+                "(TransactionId: %v)",
+                transactionId);
         }
     }
 
@@ -2090,6 +2124,10 @@ private:
     // None -> Prepared
     void HydraParticipantPrepareTransaction(NTransactionSupervisor::NProto::TReqParticipantPrepareTransaction* request)
     {
+        YT_LOG_DEBUG("@@gearonixx_master HydraParticipantPrepareTransaction entered "
+            "(TransactionId: %v) — Prepare RPC from coordinator landed in this cell's automaton; "
+            "TransactionManager_->PrepareTransactionCommit will fire registered action prepare-handlers (e.g. HydraPrepareFreeze)",
+            FromProto<TTransactionId>(request->transaction_id()));
         auto transactionId = FromProto<TTransactionId>(request->transaction_id());
         auto prepareTimestamp = request->prepare_timestamp();
         auto prepareTimestampClusterTag = FromProto<TClusterTag>(request->prepare_timestamp_cluster_tag());
@@ -2216,6 +2254,10 @@ private:
     // Prepared -> Committed or ReadyToCommit -> Committed
     void HydraParticipantCommitTransaction(NTransactionSupervisor::NProto::TReqParticipantCommitTransaction* request)
     {
+        YT_LOG_DEBUG("@@gearonixx_master HydraParticipantCommitTransaction entered "
+            "(TransactionId: %v) — Commit RPC from coordinator landed; "
+            "TransactionManager_->CommitTransaction will fire registered action commit-handlers (e.g. HydraCommitFreeze)",
+            FromProto<TTransactionId>(request->transaction_id()));
         auto transactionId = FromProto<TTransactionId>(request->transaction_id());
         auto commitTimestamp = request->commit_timestamp();
         auto commitTimestampClusterTag = FromProto<TClusterTag>(request->commit_timestamp_cluster_tag());
@@ -2593,6 +2635,10 @@ private:
         YT_VERIFY(HasMutationContext());
 
         auto transactionId = commit->GetTransactionId();
+        YT_LOG_DEBUG("@@gearonixx_master RunCoordinatorPrepare entered "
+            "(TransactionId: %v) — about to PrepareTransactionCommit on coordinator cell "
+            "(this dispatches the action prepare-handler, e.g. HydraPrepareFreeze, on the NATIVE cell)",
+            transactionId);
         auto prepareMode = commit->GetCoordinatorPrepareMode();
         auto stronglyOrdered = commit->GetStronglyOrdered();
         auto latePrepare = prepareMode == ETransactionCoordinatorPrepareMode::Late;
@@ -2669,6 +2715,10 @@ private:
     void RunCoordinatorCommit(TCommit* commit)
     {
         YT_VERIFY(HasMutationContext());
+        YT_LOG_DEBUG("@@gearonixx_master RunCoordinatorCommit entered "
+            "(TransactionId: %v) — about to CommitTransaction on coordinator cell "
+            "(this dispatches the action commit-handler, e.g. HydraCommitFreeze, on the NATIVE cell)",
+            commit->GetTransactionId());
 
         // Make a copy, commit may die.
         auto identity = commit->AuthenticationIdentity();

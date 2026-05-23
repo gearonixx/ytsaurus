@@ -241,6 +241,9 @@ DEFINE_ENUM(EMisconfiguredPartitionTactics,
     ((Skip)     (1))
 );
 
+
+
+// LargeChunkFirst — выше шанс попасть в выборку у чанков побольше (сэмплируем пропорционально размеру/весу). FreshChunkFirst — выше шанс у недавно созданных.
 //! NB: This enum is part of the persistent state.
 DEFINE_ENUM(EDictionaryCompressionPolicy,
     // Placeholder representing null dictionary.
@@ -308,6 +311,8 @@ using TKeyRef = TUnversionedValueRange;
 
 using TLegacyKey = TUnversionedRow;
 using TLegacyMutableKey = TMutableUnversionedRow;
+// TLegacyOwningKey — это просто owning-строка, используемая как ключ
+// границы tablet'ов, ключи в индексах и т.п.).
 using TLegacyOwningKey = TUnversionedOwningRow;
 
 // TODO(babenko): replace with TRange<TUnversionedRow>.

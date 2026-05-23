@@ -969,7 +969,7 @@ IAttributeDictionaryPtr ResolveExternalTable(
         THROW_ERROR_EXCEPTION_IF_FAILED(rspOrError, "Error getting basic attributes of table %v", path);
         const auto& rsp = rspOrError.Value();
         // это MinValidCellTag, самый первый валидный cell tag. То есть это обычная вторичная мастер-ячейка №1, не sentin
-        // object_id === tableI
+        // object_id === tableId @geraronixx
         *tableId = FromProto<TTableId>(rsp->object_id());
         *externalCellTag = FromProto<TCellTag>(rsp->external_cell_tag());
         auto chunkCount = rsp->chunk_count();

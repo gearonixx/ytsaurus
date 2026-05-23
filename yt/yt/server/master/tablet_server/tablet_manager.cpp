@@ -3658,11 +3658,18 @@ private:
 
     void DoFreezeTablet(TTabletBase* tablet) override
     {
+        YT_LOG_DEBUG("DoFreezeTablet invoked (TabletId: %v)", tablet->GetId());
+
         YT_VERIFY(tablet->GetType() == EObjectType::Tablet);
 
         const auto& hiveManager = Bootstrap_->GetHiveManager();
         auto* cell = tablet->GetCell();
         auto state = tablet->GetState();
+        YT_LOG_DEBUG("Fetched tablet state for freeze (TabletId: %v, State: %v, CellId: %v)",
+            tablet->GetId(),
+            state,
+            cell->GetId());
+
         YT_VERIFY(state == ETabletState::Mounted ||
             state == ETabletState::FrozenMounting ||
             state == ETabletState::Frozen ||
@@ -3675,30 +3682,57 @@ private:
                 cell->GetId());
 
             tablet->SetState(ETabletState::Freezing);
+            YT_LOG_DEBUG("Tablet state set to Freezing (TabletId: %v)", tablet->GetId());
 
             tablet->Servant().SetState(ETabletState::Freezing);
+            YT_LOG_DEBUG("Primary servant state set to Freezing (TabletId: %v)", tablet->GetId());
+
             if (auto& auxiliaryServant = tablet->AuxiliaryServant()) {
                 YT_LOG_DEBUG("Freezing auxiliary tablet servant (TabletId: %v)",
                     tablet->GetId());
                 auxiliaryServant.SetState(ETabletState::Freezing);
+                YT_LOG_DEBUG("Auxiliary servant state set to Freezing (TabletId: %v)", tablet->GetId());
             }
 
             TReqFreezeTablet request;
             ToProto(request.mutable_tablet_id(), tablet->GetId());
+            YT_LOG_DEBUG("TReqFreezeTablet built (TabletId: %v)", tablet->GetId());
 
             auto mailbox = hiveManager->GetMailbox(tablet->GetNodeEndpointId());
+            YT_LOG_DEBUG("Resolved Hive mailbox for tablet node (TabletId: %v, EndpointId: %v)",
+                tablet->GetId(),
+                tablet->GetNodeEndpointId());
+
+            // На tablet node (таблетную ноду).
+            // sТочнее даже не «на ноду» как на физическую машину, а на конкретный tablet cell, который на этой tablet node хостится.
+
             hiveManager->PostMessage(mailbox, request);
+            YT_LOG_DEBUG("Posted TReqFreezeTablet to tablet node (TabletId: %v)", tablet->GetId());
+        } else {
+            YT_LOG_DEBUG("Skipping freeze, tablet not in Mounted state (TabletId: %v, State: %v)",
+                tablet->GetId(),
+                state);
         }
     }
 
     void DoUnfreezeTablet(TTabletBase* tablet) override
     {
+        YT_LOG_DEBUG("DoUnfreezeTablet invoked (TabletId: %v)", tablet->GetId());
+
         YT_VERIFY(tablet->GetType() == EObjectType::Tablet);
         auto* table = tablet->As<TTablet>()->GetTable();
+        YT_LOG_DEBUG("Resolved owning table for unfreeze (TabletId: %v, TableId: %v)",
+            tablet->GetId(),
+            table->GetId());
 
         const auto& hiveManager = Bootstrap_->GetHiveManager();
         auto* cell = tablet->GetCell();
         auto state = tablet->GetState();
+        YT_LOG_DEBUG("Fetched tablet state for unfreeze (TabletId: %v, State: %v, CellId: %v)",
+            tablet->GetId(),
+            state,
+            cell->GetId());
+
         YT_VERIFY(state == ETabletState::Mounted ||
             state == ETabletState::Frozen ||
             state == ETabletState::Unfreezing);
@@ -3710,19 +3744,34 @@ private:
                 cell->GetId());
 
             tablet->Servant().SetState(ETabletState::Unfreezing);
+            YT_LOG_DEBUG("Primary servant state set to Unfreezing (TabletId: %v)", tablet->GetId());
+
             YT_VERIFY(!tablet->AuxiliaryServant());
             tablet->SetState(ETabletState::Unfreezing);
+            YT_LOG_DEBUG("Tablet state set to Unfreezing (TabletId: %v)", tablet->GetId());
 
             TReqUnfreezeTablet request;
 
             if (IsDynamicStoreReadEnabled(table, GetDynamicConfig())) {
+                YT_LOG_DEBUG("Dynamic store read enabled, attaching dynamic stores (TabletId: %v)",
+                    tablet->GetId());
                 CreateAndAttachDynamicStores(tablet->As<TTablet>(), &request);
             }
 
             ToProto(request.mutable_tablet_id(), tablet->GetId());
+            YT_LOG_DEBUG("TReqUnfreezeTablet built (TabletId: %v)", tablet->GetId());
 
             auto mailbox = hiveManager->GetMailbox(tablet->GetNodeEndpointId());
+            YT_LOG_DEBUG("Resolved Hive mailbox for tablet node (TabletId: %v, EndpointId: %v)",
+                tablet->GetId(),
+                tablet->GetNodeEndpointId());
+
             hiveManager->PostMessage(mailbox, request);
+            YT_LOG_DEBUG("Posted TReqUnfreezeTablet to tablet node (TabletId: %v)", tablet->GetId());
+        } else {
+            YT_LOG_DEBUG("Skipping unfreeze, tablet not in Frozen state (TabletId: %v, State: %v)",
+                tablet->GetId(),
+                state);
         }
     }
 
