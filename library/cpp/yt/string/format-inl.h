@@ -1297,7 +1297,7 @@ void Format(TStringBuilderBase* builder, TFormatString<TArgs...> format, TArgs&&
 }
 
 template <class... TArgs>
-TString ormat(TFormatString<TArgs...> format, TArgs&&... args)
+TString Format(TFormatString<TArgs...> format, TArgs&&... args)
 {
     TStringBuilder builder;
     Format(&builder, format, std::forward<TArgs>(args)...);

@@ -755,4 +755,23 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+struct TGetTableRowCountCommandOptions
+{ };
+
+class TGetTableRowCountCommand
+    : public TTypedCommand<TGetTableRowCountCommandOptions>
+{
+public:
+    REGISTER_YSON_STRUCT_LITE(TGetTableRowCountCommand);
+
+    static void Register(TRegistrar registrar);
+
+private:
+    NYPath::TYPath Path;
+
+    void DoExecute(ICommandContextPtr context) override;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
 } // namespace NYT::NDriver

@@ -2149,4 +2149,56 @@ void TGetTableMountInfoCommand::DoExecute(ICommandContextPtr context)
 
 ////////////////////////////////////////////////////////////////////////////////
 
+void TGetTableRowCountCommand::Register(TRegistrar registrar)
+{
+    registrar.Parameter("path", &TThis::Path);
+}
+
+void TGetTableRowCountCommand::DoExecute(ICommandContextPtr context)
+{
+    auto client = context->GetClient();
+
+    TGetNodeOptions options;
+    options.Attributes = {"dynamic", "row_count"};
+
+    auto attributesYson = WaitFor(client->GetNode(Path + "/@", options))
+        .ValueOrThrow();
+    auto attributes = ConvertToNode(attributesYson)->AsMap();
+
+    auto dynamicNode = attributes->FindChild("dynamic");
+    bool isDynamic = dynamicNode && ConvertTo<bool>(dynamicNode);
+
+    i64 rowCount = 0;
+    if (isDynamic) {
+        TSelectRowsOptions selectOptions;
+        selectOptions.InputRowLimit = std::numeric_limits<i64>::max();
+
+        auto query = Format("sum(1) as cnt from [%v] group by 1", Path);
+        auto selectResult = WaitFor(client->SelectRows(query, selectOptions))
+            .ValueOrThrow();
+        auto rows = selectResult.Rowset->GetRows();
+        if (!rows.empty()) {
+            const auto& value = rows[0][0];
+            if (value.Type == EValueType::Int64) {
+                rowCount = value.Data.Int64;
+            } else if (value.Type == EValueType::Uint64) {
+                rowCount = static_cast<i64>(value.Data.Uint64);
+            }
+        }
+    } else {
+        rowCount = ConvertTo<i64>(attributes->GetChildOrThrow("row_count"));
+    }
+
+    auto clusterName = WaitFor(client->GetClusterName())
+        .ValueOrThrow();
+
+    context->ProduceOutputValue(BuildYsonStringFluently()
+        .BeginMap()
+            .Item("row_count").Value(rowCount)
+            .Item("cluster_name").Value(clusterName)
+        .EndMap());
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 } // namespace NYT::NDriver

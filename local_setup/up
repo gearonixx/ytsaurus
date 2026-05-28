@@ -4,7 +4,9 @@
 #   04-copy-binary     — свежий ytserver-all из контейнера ytsaurus-dev
 #   05-start-cluster   — поднять YT-кластер (в фоне, --sync) + Query Tracker
 #                        (передаём в 05 через EXTRA_YT_LOCAL_ARGS)
-#   06-start-ui        — поднять UI в docker (после того как http_proxy ответил)
+#   UI                 — по умолчанию dev-сервер из исходников (rspack, hot-reload).
+#                        С флагом --remote-ui: 06-start-ui.sh, docker-образ
+#                        ghcr.io/ytsaurus/ui (без чекаута UI-репо, удобно для smoke).
 #   11-test-dyn-table-rpc — smoke-тест динамической таблицы через RPC
 #
 # Про Query Tracker:
@@ -24,14 +26,49 @@
 # 01/03 — одноразовые (контейнер + venv), здесь не дёргаются.
 #
 # Кластер остаётся жить на foreground'е этого скрипта: Ctrl+C → trap → stop всего.
+#
+# Запуск:
+#   ./up                — UI из исходников (dev-сервер)
+#   ./up --remote-ui    — UI из docker-образа ghcr.io/ytsaurus/ui
+# Env:
+#   UI_REPO       путь к чекауту ytsaurus-ui   (default: /home/x/try3/ytsaurus-ui)
+#   UI_PORT       порт dev-сервера UI          (default: 8080; занимает и UI_PORT+1)
+#   CLUSTER_NAME  id кластера в UI             (default: local — как в 06-start-ui.sh)
+#   NODE_VERSION  версия node через mise       (default: 20 — требование репозитория)
+#   PROXY_PORT    порт http_proxy              (default: 8000)
 
 set -e
+
+REMOTE_UI=0
+for arg in "$@"; do
+    case "$arg" in
+        --remote-ui) REMOTE_UI=1 ;;
+        -h|--help)
+            sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *) echo "[up] неизвестный аргумент: $arg" >&2; exit 2 ;;
+    esac
+done
 
 VENV="${VENV:-$HOME/yt-venv}"
 YTSERVER_ALL="${YTSERVER_ALL:-/tmp/ytserver-all}"
 PROXY_PORT="${PROXY_PORT:-8000}"
 
+# --- настройки локального UI (используются, если без --remote-ui) ---
+UI_REPO="${UI_REPO:-/home/x/try3/ytsaurus-ui}"
+UI_DIR="$UI_REPO/packages/ui"
+UI_PORT="${UI_PORT:-8080}"
+CLUSTER_NAME="${CLUSTER_NAME:-local}"
+NODE_VERSION="${NODE_VERSION:-20}"
+UI_LOG="${UI_LOG:-/tmp/yt_local/ui-dev.log}"
+
 cd "$(dirname "$0")"
+
+# Команда на нужной версии node (репозиторий требует node 20; глобально может быть 25).
+run_node() {
+    if command -v mise >/dev/null 2>&1; then mise exec "node@${NODE_VERSION}" -- "$@"; else "$@"; fi
+}
 
 [ -f "$VENV/bin/activate" ] || { echo "Нет $VENV/bin/activate. Запусти 03-install-host-python.sh"; exit 1; }
 # shellcheck disable=SC1091
@@ -47,6 +84,7 @@ fi
 echo
 echo "=== [up] 08-stop-all (clean) ==="
 yes y | ./08-stop-all.sh || true
+docker rm -f yt-ui >/dev/null 2>&1 || true
 
 # 2. Свежий бинарь. После шага 1 /tmp/ytserver-all удалён → всегда копируем заново.
 echo
@@ -71,16 +109,38 @@ echo "=== [up] 05-start-cluster + query_tracker (background) ==="
 EXTRA_YT_LOCAL_ARGS="--component {name=query_tracker}" ./05-start-cluster.sh &
 CLUSTER_PID=$!
 
+UI_PID=""
 # Чтобы Ctrl+C / падение up не оставило висеть кластер и UI.
+#
+# Почему недостаточно одного `kill $CLUSTER_PID`: ytserver-* и yt_env_watcher
+# стартуют через `--setsid` (видно в их argv), поэтому в новой сессии и не
+# ловят SIGINT нашей группы. Их подбирает только pdeathsig=SIGTERM, который
+# срабатывает, когда умрёт их python-родитель `yt_local start --sync`. Поэтому
+# здесь явно валим python-родителя по имени; pdeathsig добивает остальное.
 cleanup() {
     trap - EXIT INT TERM
     echo
-    echo "=== [up] cleanup: останавливаю кластер (pid $CLUSTER_PID) и UI ==="
+    echo "=== [up] cleanup: останавливаю UI и кластер (pid $CLUSTER_PID) ==="
     docker rm -f yt-ui >/dev/null 2>&1 || true
+    if [ -n "$UI_PID" ]; then
+        kill "$UI_PID" 2>/dev/null || true
+        pkill -f "app-builder dev" 2>/dev/null || true  # добить дочерние node-процессы dev-сервера
+    fi
     if kill -0 "$CLUSTER_PID" 2>/dev/null; then
         kill -INT "$CLUSTER_PID" 2>/dev/null || true
-        wait "$CLUSTER_PID" 2>/dev/null || true
     fi
+    pkill -TERM -f 'yt_local start --sync' 2>/dev/null || true
+    pkill -TERM -f 'yt_env_watcher' 2>/dev/null || true
+    # Ждём до 5с, пока pdeathsig разнесёт SIGTERM по ytserver-*.
+    for _ in 1 2 3 4 5; do
+        pgrep -f 'ytserver-|yt_local start --sync|yt_env_watcher' >/dev/null || break
+        sleep 1
+    done
+    # Что не успело — добиваем SIGKILL.
+    pkill -KILL -f 'ytserver-' 2>/dev/null || true
+    pkill -KILL -f 'yt_local start --sync' 2>/dev/null || true
+    pkill -KILL -f 'yt_env_watcher' 2>/dev/null || true
+    wait "$CLUSTER_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -139,10 +199,54 @@ if [ "$qt_ready" != "1" ]; then
     exit 1
 fi
 
-# 4. UI
-echo
-echo "=== [up] 06-start-ui ==="
-./06-start-ui.sh
+# 4. UI: либо docker (06-start-ui.sh), либо dev-сервер из исходников.
+if [ "$REMOTE_UI" = "1" ]; then
+    echo
+    echo "=== [up] 06-start-ui (remote docker image) ==="
+    ./06-start-ui.sh
+    UI_URL="http://localhost/"
+else
+    echo
+    echo "=== [up] локальный UI из $UI_DIR (вместо docker ghcr.io/ytsaurus/ui) ==="
+    [ -d "$UI_DIR" ] || { echo "[up] нет $UI_DIR — задай UI_REPO= или используй --remote-ui"; exit 1; }
+    if [ ! -d "$UI_DIR/node_modules/.bin" ]; then
+        echo "=== [up] npm install (node $NODE_VERSION, первый запуск) ==="
+        ( cd "$UI_DIR" && run_node npm install )
+    fi
+
+    mkdir -p "$(dirname "$UI_LOG")"
+    echo "=== [up] старт dev-сервера на :$UI_PORT (лог: $UI_LOG) ==="
+    # APP_ENV=local: без auth/TVM, кластеры берутся из $PROXY (config.localcluster.ts).
+    # LOCAL_DEV_PORT: dev-сервер слушает обычный TCP-порт (без nginx).
+    # Остальные переменные — как в 06-start-ui.sh.
+    (
+        cd "$UI_DIR"
+        APP_ENV=local \
+        PROXY="localhost:$PROXY_PORT" \
+        PROXY_INTERNAL="localhost:$PROXY_PORT" \
+        YT_LOCAL_CLUSTER_ID="$CLUSTER_NAME" \
+        APP_INSTALLATION=custom \
+        ALLOW_PASSWORD_AUTH=1 \
+        YT_AUTH_ALLOW_INSECURE=true \
+        LOCAL_DEV_PORT="$UI_PORT" \
+        run_node npm run dev:app
+    ) > "$UI_LOG" 2>&1 &
+    UI_PID=$!
+
+    echo -n "=== [up] жду UI на :$UI_PORT (первая сборка ~15-30с) "
+    ui_ready=0
+    for i in $(seq 1 180); do
+        if curl -sf -m 1 "http://localhost:$UI_PORT" >/dev/null 2>&1; then
+            echo " — ok (${i}s)"; ui_ready=1; break
+        fi
+        if ! kill -0 "$UI_PID" 2>/dev/null; then
+            echo; echo "[up] dev-сервер UI упал. Лог: $UI_LOG"; tail -20 "$UI_LOG"; exit 1
+        fi
+        echo -n "."; sleep 1
+    done
+    [ "$ui_ready" = "1" ] || { echo; echo "[up] UI не поднялся за 180с. Лог: $UI_LOG"; exit 1; }
+    UI_URL="http://localhost:$UI_PORT/"
+fi
 
 # 5. Smoke-тест: создаём dyn-таблицу через RPC, mount, insert-rows, select-rows.
 echo
@@ -150,8 +254,12 @@ echo "=== [up] 11-test-dyn-table-rpc ==="
 ./11-test-dyn-table-rpc.sh
 
 echo
-echo "=== [up] всё поднято. UI: http://localhost/  Proxy: localhost:$PROXY_PORT ==="
-echo "Кластер крутится в фоне (pid $CLUSTER_PID). Ctrl+C здесь — остановит всё."
+echo "=== [up] всё поднято. UI: $UI_URL  Proxy: localhost:$PROXY_PORT ==="
+if [ "$REMOTE_UI" = "1" ]; then
+    echo "Кластер крутится в фоне (pid $CLUSTER_PID). Ctrl+C здесь — остановит всё."
+else
+    echo "Логин: root, пароль пустой. Кластер pid $CLUSTER_PID, UI pid $UI_PID. Ctrl+C здесь — остановит всё."
+fi
 
 # Удерживаем foreground на процессе кластера, чтобы Ctrl+C дошёл до trap.
 wait "$CLUSTER_PID"
