@@ -54,6 +54,21 @@ private:
         ValidatePermission(EPermissionCheckScope::This, EPermission::Remove);
     }
 
+    void ValidatePasswordAttributeReadPermission(TInternedAttributeKey key)
+    {
+        const auto& securityManager = Bootstrap_->GetSecurityManager();
+        auto* authenticatedUser = securityManager->GetAuthenticatedUser();
+        auto* user = GetThisImpl();
+        if (authenticatedUser != user && !securityManager->IsSuperuser(authenticatedUser)) {
+            THROW_ERROR_EXCEPTION(
+                NSecurityClient::EErrorCode::AuthorizationError,
+                "Access to attribute %Qv of user %Qv is denied: "
+                "only the user itself or a superuser can read it",
+                key.Unintern(),
+                user->GetName());
+        }
+    }
+
     void ListSystemAttributes(std::vector<ISystemAttributeProvider::TAttributeDescriptor>* descriptors) override
     {
         TBase::ListSystemAttributes(descriptors);
@@ -239,6 +254,7 @@ private:
                 return true;
 
             case EInternedAttributeKey::HashedPassword:
+                ValidatePasswordAttributeReadPermission(key);
                 if (!user->HashedPassword()) {
                     break;
                 }
@@ -248,6 +264,7 @@ private:
                 return true;
 
             case EInternedAttributeKey::PasswordSalt:
+                ValidatePasswordAttributeReadPermission(key);
                 if (!user->PasswordSalt()) {
                     break;
                 }
