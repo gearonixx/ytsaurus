@@ -603,6 +603,39 @@ class TestUsers(YTEnvSetup):
         rev4 = get("//sys/users/u/@password_revision")
         assert rev4 > rev3
 
+    @authors("gearonixx")
+    def test_password_hash_and_salt_are_not_readable_by_others(self):
+        if self.DRIVER_BACKEND == "rpc":
+            return
+
+        create_user("victim")
+        create_user("attacker")
+        set_user_password("victim", "topsecret")
+
+        assert len(get("//sys/users/victim/@hashed_password")) == 64
+        assert len(get("//sys/users/victim/@password_salt")) == 32
+
+        assert len(get("//sys/users/victim/@hashed_password", authenticated_user="victim")) == 64
+        assert len(get("//sys/users/victim/@password_salt", authenticated_user="victim")) == 32
+
+        assert get("//sys/users/victim/@password_revision", authenticated_user="attacker") >= 0
+        with raises_yt_error(yt_error_codes.AuthorizationErrorCode):
+            get("//sys/users/victim/@hashed_password", authenticated_user="attacker")
+        with raises_yt_error(yt_error_codes.AuthorizationErrorCode):
+            get("//sys/users/victim/@password_salt", authenticated_user="attacker")
+
+        set("//sys/users/victim/@acl", [make_ace("allow", "attacker", ["read", "write", "administer", "remove"])])
+        with raises_yt_error(yt_error_codes.AuthorizationErrorCode):
+            get("//sys/users/victim/@hashed_password", authenticated_user="attacker")
+
+        full_attributes = get("//sys/users/victim/@", authenticated_user="attacker")
+        assert isinstance(full_attributes["hashed_password"], YsonEntity)
+        assert isinstance(full_attributes["password_salt"], YsonEntity)
+
+        add_member("attacker", "superusers")
+        assert len(get("//sys/users/victim/@hashed_password", authenticated_user="attacker")) == 64
+        assert len(get("//sys/users/victim/@password_salt", authenticated_user="attacker")) == 32
+
     @authors("gritukan", "aleksandr.gaev", "pavel-bash")
     def test_tokens(self):
         if self.DRIVER_BACKEND == "rpc":
