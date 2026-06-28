@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# Один вход: полная пересборка локального окружения с нуля + Query Tracker.
+#   08-stop-all        — снести предыдущие кластер+UI и почистить /tmp/yt_local
+#   04-copy-binary     — свежий ytserver-all из контейнера ytsaurus-dev
+#   05-start-cluster   — поднять YT-кластер (в фоне, --sync) + Query Tracker
+#                        (передаём в 05 через EXTRA_YT_LOCAL_ARGS)
+#   UI                 — по умолчанию dev-сервер из исходников (rspack, hot-reload).
+#                        С флагом --remote-ui: 06-start-ui.sh, docker-образ
+#                        ghcr.io/ytsaurus/ui (без чекаута UI-репо, удобно для smoke).
+#   11-test-dyn-table-rpc — smoke-тест динамической таблицы через RPC
+#
+# Про Query Tracker:
+#   yt_local поддерживает компоненты через флаг `--component`
+#   (см. yt/python/yt/local/commands.py:118 run_components).
+#   QueryTracker-компонент (yt/python/yt/environment/components/query_tracker/)
+#   автоматически:
+#     * запускает ytserver-query-tracker рядом с кластером
+#     * инициализирует dyn-таблицы //sys/query_tracker/{active,finished_queries,...}
+#     * регистрирует стейджи `production` и `testing` в
+#       //sys/@cluster_connection/query_tracker
+#       (без этого UI выдаёт "Query tracker stage 'testing' is not found")
+#     * создаёт ACO-объекты queries/{nobody, everyone, everyone-share}
+#   Тяжелее на ~30с старта и один лишний субпроцесс — взамен работает UI Queries.
+#
+# 02 (overcommit) — вызывается только если оно сброшено (после ребута).
+# 01/03 — одноразовые (контейнер + venv), здесь не дёргаются.
+#
+# Кластер остаётся жить на foreground'е этого скрипта: Ctrl+C → trap → stop всего.
+#
+# Запуск:
+#   ./up                — UI из исходников (dev-сервер)
+#   ./up --remote-ui    — UI из docker-образа ghcr.io/ytsaurus/ui
+# Env:
+#   UI_REPO       путь к чекауту ytsaurus-ui   (default: /home/x/try3/ytsaurus-ui)
+#   UI_PORT       порт dev-сервера UI          (default: 8080; занимает и UI_PORT+1)
+#   CLUSTER_NAME  id кластера в UI             (default: local — как в 06-start-ui.sh)
+#   NODE_VERSION  версия node через mise       (default: 20 — требование репозитория)
+#   PROXY_PORT    порт http_proxy              (default: 8000)
+
+set -e
+
+REMOTE_UI=0
+for arg in "$@"; do
+    case "$arg" in
+        --remote-ui) REMOTE_UI=1 ;;
+        -h|--help)
+            sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *) echo "[up] неизвестный аргумент: $arg" >&2; exit 2 ;;
+    esac
+done
+
+VENV="${VENV:-$HOME/yt-venv}"
+YTSERVER_ALL="${YTSERVER_ALL:-/tmp/ytserver-all}"
+PROXY_PORT="${PROXY_PORT:-8000}"
+
+# Аутентификация. ENABLE_AUTH=1 (по умолчанию) -> кластер поднимается с
+# require_authentication на HTTP-прокси, создаётся суперюзер admin/password и
+# тестовый юзер petya/apple1 (17-setup-auth-user.sh). ENABLE_AUTH=0 -> старый
+# режим без аутентификации (root, пустой пароль). Передаётся в 05 через export.
+ENABLE_AUTH="${ENABLE_AUTH:-1}"
+export ENABLE_AUTH
+# Админский cypress-токен из --create-admin-user (yt_env.py DEFAULT_ADMIN_TOKEN).
+ADMIN_TOKEN="${ADMIN_TOKEN:-password}"
+
+# --- настройки локального UI (используются, если без --remote-ui) ---
+UI_REPO="${UI_REPO:-/home/x/try3/ytsaurus-ui}"
+UI_DIR="$UI_REPO/packages/ui"
+UI_PORT="${UI_PORT:-8080}"
+CLUSTER_NAME="${CLUSTER_NAME:-local}"
+NODE_VERSION="${NODE_VERSION:-20}"
+UI_LOG="${UI_LOG:-/tmp/yt_local/ui-dev.log}"
+
+cd "$(dirname "$0")"
+
+# Команда на нужной версии node (репозиторий требует node 20; глобально может быть 25).
+run_node() {
+    if command -v mise >/dev/null 2>&1; then mise exec "node@${NODE_VERSION}" -- "$@"; else "$@"; fi
+}
+
+[ -f "$VENV/bin/activate" ] || { echo "Нет $VENV/bin/activate. Запусти 03-install-host-python.sh"; exit 1; }
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+# КРИТИЧНО для запуска с аутентификацией: внутренние клиенты yt_local на старте
+# (synchronize -> ожидание мастера, create_admin_user) ходят НАТИВНЫМ драйвером
+# напрямую к мастеру. Мастер доверяет нативному подключению и пускает как root
+# ТОЛЬКО ЕСЛИ токен не предъявлен. Если же в окружении есть YT_TOKEN или на диске
+# лежит ~/.yt/token — нативный клиент предъявит его мастеру, а тот отвергнет
+# ("You have an improper authentication token"), потому что admin-токен ещё не
+# создан (create_admin_user идёт ПОСЛЕ ожидания мастера). Итог — кластер не
+# стартует. Поэтому на время старта окружение должно быть БЕЗ токенов:
+#   * снимаем унаследованный YT_TOKEN;
+#   * убираем СТАРЫЙ ~/.yt/token от прошлого (уже уничтоженного) кластера —
+#     он всё равно невалиден на новом cell'е. Свежий токен запишет 17 уже ПОСЛЕ
+#     поднятия кластера.
+# Админский YT_TOKEN для НАШИХ проверок (healthcheck/QT/smoke) выставим позже —
+# уже ПОСЛЕ форка 05 (см. ниже), чтобы он не утёк в стартующий yt_local.
+unset YT_TOKEN
+STALE_TOKEN_FILE="$HOME/.yt/token"
+if [ "$ENABLE_AUTH" = "1" ] && [ -f "$STALE_TOKEN_FILE" ]; then
+    mv -f "$STALE_TOKEN_FILE" "$STALE_TOKEN_FILE.prev" 2>/dev/null \
+        && echo "[up] убрал старый ~/.yt/token -> ~/.yt/token.prev (невалиден на новом кластере)"
+fi
+
+if [ "$(cat /proc/sys/vm/overcommit_memory)" != "1" ]; then
+    echo "=== [up] vm.overcommit_memory != 1 — прогоняю 02-prepare-host.sh ==="
+    ./02-prepare-host.sh
+fi
+
+# 1. Чистый стоп всего предыдущего. На вопрос про /tmp/yt_local отвечаем "y"
+#    (логи на --enable-debug-logging улетают в сотни МБ за минуты — старое не жалко).
+echo
+echo "=== [up] 08-stop-all (clean) ==="
+yes y | ./08-stop-all.sh || true
+docker rm -f yt-ui >/dev/null 2>&1 || true
+
+# 2. Свежий бинарь. После шага 1 /tmp/ytserver-all удалён → всегда копируем заново.
+echo
+echo "=== [up] 04-copy-binary ==="
+./04-copy-binary.sh
+
+# Sanity-check: editable-инсталл должен видеть QueryTracker. Если сломано —
+# падаем здесь с понятным сообщением, а не через минуту в run_components.
+"$VENV/bin/python" -c "from yt.environment.components.query_tracker import QueryTracker" 2>/dev/null \
+    || { echo "[up] QueryTracker недоступен. Перезапусти 03-install-host-python.sh"; exit 1; }
+# ytserver-all multicall должен содержать программу ytserver-query-tracker.
+if ! "$YTSERVER_ALL" --help 2>&1 | grep -q "^  ytserver-query-tracker$"; then
+    echo "[up] $YTSERVER_ALL не содержит ytserver-query-tracker (слишком старый бинарь)"
+    exit 1
+fi
+
+# 3. Стартуем кластер в фоне. 05 уже зовёт `yt_local start --sync`, который держит
+#    терминал — пускаем его в бэкграунд этого скрипта и ждём, пока http_proxy
+#    реально ответит на :8000. EXTRA_YT_LOCAL_ARGS добавляет компонент QT.
+echo
+echo "=== [up] 05-start-cluster + query_tracker (background) ==="
+EXTRA_YT_LOCAL_ARGS="--component {name=query_tracker}" ./05-start-cluster.sh &
+CLUSTER_PID=$!
+
+# Теперь, когда 05 уже форкнут с чистым (без токена) окружением, можно выставить
+# админский токен для НАШИХ проверок ниже (healthcheck/QT/smoke ходят на закрытый
+# HTTP-прокси и без токена получат 401). В уже стартующий yt_local это не утечёт.
+if [ "$ENABLE_AUTH" = "1" ]; then
+    export YT_TOKEN="$ADMIN_TOKEN"
+fi
+
+UI_PID=""
+# Чтобы Ctrl+C / падение up не оставило висеть кластер и UI.
+#
+# Почему недостаточно одного `kill $CLUSTER_PID`: ytserver-* и yt_env_watcher
+# стартуют через `--setsid` (видно в их argv), поэтому в новой сессии и не
+# ловят SIGINT нашей группы. Их подбирает только pdeathsig=SIGTERM, который
+# срабатывает, когда умрёт их python-родитель `yt_local start --sync`. Поэтому
+# здесь явно валим python-родителя по имени; pdeathsig добивает остальное.
+cleanup() {
+    trap - EXIT INT TERM
+    echo
+    echo "=== [up] cleanup: останавливаю UI и кластер (pid $CLUSTER_PID) ==="
+    docker rm -f yt-ui >/dev/null 2>&1 || true
+    if [ -n "$UI_PID" ]; then
+        kill "$UI_PID" 2>/dev/null || true
+        pkill -f "app-builder dev" 2>/dev/null || true  # добить дочерние node-процессы dev-сервера
+    fi
+    if kill -0 "$CLUSTER_PID" 2>/dev/null; then
+        kill -INT "$CLUSTER_PID" 2>/dev/null || true
+    fi
+    pkill -TERM -f 'yt_local start --sync' 2>/dev/null || true
+    pkill -TERM -f 'yt_env_watcher' 2>/dev/null || true
+    # Ждём до 5с, пока pdeathsig разнесёт SIGTERM по ytserver-*.
+    for _ in 1 2 3 4 5; do
+        pgrep -f 'ytserver-|yt_local start --sync|yt_env_watcher' >/dev/null || break
+        sleep 1
+    done
+    # Что не успело — добиваем SIGKILL.
+    pkill -KILL -f 'ytserver-' 2>/dev/null || true
+    pkill -KILL -f 'yt_local start --sync' 2>/dev/null || true
+    pkill -KILL -f 'yt_env_watcher' 2>/dev/null || true
+    wait "$CLUSTER_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# Ждём, пока http_proxy реально начнёт обслуживать API. yt_local --sync
+# возвращает control только после healthcheck'а, но он бежит в фоне — нам нужно
+# увидеть это снаружи. Дёргаем `yt exists /` через CLI: дёшево и проверяет полный
+# путь до HTTP-прокси, а не просто TCP-accept.
+echo -n "=== [up] жду http_proxy на :$PROXY_PORT "
+ready=0
+for i in $(seq 1 180); do
+    if YT_PROXY="localhost:$PROXY_PORT" yt exists / >/dev/null 2>&1; then
+        echo " — ok (${i}s)"
+        ready=1
+        break
+    fi
+    if ! kill -0 "$CLUSTER_PID" 2>/dev/null; then
+        echo
+        echo "[up] кластер упал на старте. Лог: /tmp/yt_local/*/logs/"
+        exit 1
+    fi
+    echo -n "."
+    sleep 1
+done
+if [ "$ready" != "1" ]; then
+    echo
+    echo "[up] http_proxy не поднялся за 180с. Лог: /tmp/yt_local/*/logs/http-proxy-0.log"
+    exit 1
+fi
+
+# Ждём, пока QueryTracker допишет //sys/@cluster_connection/query_tracker — это
+# происходит уже после environment.start(), внутри run_components, поэтому
+# `yt exists /` успевает ответить раньше. UI без этой ноды отдаёт
+# "Query tracker stage 'testing' is not found".
+echo -n "=== [up] жду регистрацию query_tracker "
+qt_ready=0
+for i in $(seq 1 180); do
+    if YT_PROXY="localhost:$PROXY_PORT" yt exists //sys/@cluster_connection/query_tracker/stages/testing 2>/dev/null \
+        | tail -1 | grep -q true; then
+        echo " — ok (${i}s)"
+        qt_ready=1
+        break
+    fi
+    if ! kill -0 "$CLUSTER_PID" 2>/dev/null; then
+        echo
+        echo "[up] кластер упал во время инициализации QT."
+        echo "Лог: /tmp/yt_local/*/logs/query-tracker-0.log"
+        exit 1
+    fi
+    echo -n "."
+    sleep 1
+done
+if [ "$qt_ready" != "1" ]; then
+    echo
+    echo "[up] query_tracker не зарегистрировался за 180с."
+    echo "Лог: /tmp/yt_local/*/logs/query-tracker-0.log"
+    exit 1
+fi
+
+# 3.5. Тестовый юзер petya/apple1 + токен на диск (~/.yt/token). Только при
+#      включённой аутентификации — на no-auth кластере токенов не бывает.
+if [ "$ENABLE_AUTH" = "1" ]; then
+    echo
+    echo "=== [up] 17-setup-auth-user (petya/apple1 + токен в ~/.yt/token) ==="
+    ADMIN_TOKEN="$ADMIN_TOKEN" YT_PROXY="localhost:$PROXY_PORT" ./17-setup-auth-user.sh \
+        || echo "[up] WARN: не удалось создать petya (см. вывод выше)"
+fi
+
+# 4. UI: либо docker (06-start-ui.sh), либо dev-сервер из исходников.
+if [ "$REMOTE_UI" = "1" ]; then
+    echo
+    echo "=== [up] 06-start-ui (remote docker image) ==="
+    ./06-start-ui.sh
+    UI_URL="http://localhost/"
+else
+    echo
+    echo "=== [up] локальный UI из $UI_DIR (вместо docker ghcr.io/ytsaurus/ui) ==="
+    [ -d "$UI_DIR" ] || { echo "[up] нет $UI_DIR — задай UI_REPO= или используй --remote-ui"; exit 1; }
+    if [ ! -d "$UI_DIR/node_modules/.bin" ]; then
+        echo "=== [up] npm install (node $NODE_VERSION, первый запуск) ==="
+        ( cd "$UI_DIR" && run_node npm install )
+    fi
+
+    mkdir -p "$(dirname "$UI_LOG")"
+    echo "=== [up] старт dev-сервера на :$UI_PORT (лог: $UI_LOG) ==="
+    # APP_ENV=local: без auth/TVM, кластеры берутся из $PROXY (config.localcluster.ts).
+    # LOCAL_DEV_PORT: dev-сервер слушает обычный TCP-порт (без nginx).
+    # Остальные переменные — как в 06-start-ui.sh.
+    (
+        cd "$UI_DIR"
+        APP_ENV=local \
+        PROXY="localhost:$PROXY_PORT" \
+        PROXY_INTERNAL="localhost:$PROXY_PORT" \
+        YT_LOCAL_CLUSTER_ID="$CLUSTER_NAME" \
+        APP_INSTALLATION=custom \
+        ALLOW_PASSWORD_AUTH=1 \
+        YT_AUTH_ALLOW_INSECURE=true \
+        LOCAL_DEV_PORT="$UI_PORT" \
+        run_node npm run dev:app
+    ) > "$UI_LOG" 2>&1 &
+    UI_PID=$!
+
+    echo -n "=== [up] жду UI на :$UI_PORT (первая сборка ~15-30с) "
+    ui_ready=0
+    for i in $(seq 1 180); do
+        if curl -sf -m 1 "http://localhost:$UI_PORT" >/dev/null 2>&1; then
+            echo " — ok (${i}s)"; ui_ready=1; break
+        fi
+        if ! kill -0 "$UI_PID" 2>/dev/null; then
+            echo; echo "[up] dev-сервер UI упал. Лог: $UI_LOG"; tail -20 "$UI_LOG"; exit 1
+        fi
+        echo -n "."; sleep 1
+    done
+    [ "$ui_ready" = "1" ] || { echo; echo "[up] UI не поднялся за 180с. Лог: $UI_LOG"; exit 1; }
+    UI_URL="http://localhost:$UI_PORT/"
+fi
+
+# 5. Smoke-тест: создаём dyn-таблицу через RPC, mount, insert-rows, select-rows.
+echo
+echo "=== [up] 11-test-dyn-table-rpc ==="
+./11-test-dyn-table-rpc.sh
+
+echo
+echo "=== [up] всё поднято. UI: $UI_URL  Proxy: localhost:$PROXY_PORT ==="
+if [ "$ENABLE_AUTH" = "1" ]; then
+    echo "Аутентификация ВКЛЮЧЕНА (require_authentication на HTTP-прокси):"
+    echo "  UI /login:  admin / password   (суперюзер)"
+    echo "              petya / apple1      (обычный юзер)"
+    echo "  CLI:        токен petya лежит в ~/.yt/token (yt ... работает как petya)"
+    echo "              админ:  export YT_TOKEN=password"
+    echo "  Выключить:  ENABLE_AUTH=0 ./up"
+else
+    echo "Аутентификация выключена. Логин: root, пароль пустой."
+fi
+if [ "$REMOTE_UI" = "1" ]; then
+    echo "Кластер крутится в фоне (pid $CLUSTER_PID). Ctrl+C здесь — остановит всё."
+else
+    echo "Кластер pid $CLUSTER_PID, UI pid $UI_PID. Ctrl+C здесь — остановит всё."
+fi
+
+# Удерживаем foreground на процессе кластера, чтобы Ctrl+C дошёл до trap.
+wait "$CLUSTER_PID"
